@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly download_max_bytes=$((15 * 1024 * 1024))
+readonly cache_max_bytes=$((150 * 1024 * 1024))
+readonly max_files=20
+readonly default_clipboard_helper=/usr/share/omarchy/bin/omarchy-clipboard-paste-file
+
+die() {
+    printf 'copy-gif: error: %s\n' "$*" >&2
+    exit 1
+}
+
+if (($# != 3)); then
+    die "usage: $0 <url> <provider> <id>"
+fi
+
+url=$1
+provider=$2
+gif_id=$3
+
+[[ -n "$url" ]] || die 'URL must not be empty; provide the original GIF URL'
+
+validate_segment() {
+    local kind=$1
+    local value=$2
+
+    if [[ ! "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || "$value" == '.' || "$value" == '..' ]]; then
+        die "unsafe $kind segment; use only letters, digits, dot, underscore, or hyphen"
+    fi
+}
+
+validate_segment provider "$provider"
+validate_segment id "$gif_id"
+
+cache_root=${XDG_CACHE_HOME:-${HOME:-}}
+[[ -n "$cache_root" ]] || die 'XDG_CACHE_HOME or HOME must be set so the GIF can be cached'
+
+cache_dir="$cache_root/loopbox/gifs"
+target="$cache_dir/$provider-$gif_id.gif"
+
+if ! mkdir -p -- "$cache_dir"; then
+    die 'cannot create the GIF cache directory; check its parent permissions'
+fi
+
+tmp_file=''
+lock_fd=''
+lock_dir=''
+lock_held=0
+
+cleanup() {
+    local exit_status=$?
+
+    if [[ -n "$tmp_file" && -e "$tmp_file" ]]; then
+        rm -f -- "$tmp_file" || true
+    fi
+    if ((lock_held)); then
+        rmdir -- "$lock_dir" 2>/dev/null || true
+    fi
+
+    return "$exit_status"
+}
+trap cleanup EXIT
+
+# flock is part of the normal Linux userspace. The mkdir fallback keeps two
+# helper processes from pruning one another's current files on minimal hosts.
+if command -v flock >/dev/null 2>&1; then
+    lock_path="$cache_dir/.copy-gif.lock"
+    if ! exec {lock_fd}>"$lock_path"; then
+        die 'cannot create the GIF cache lock; check its directory permissions'
+    fi
+    if ! flock -n "$lock_fd"; then
+        die 'GIF cache is busy; retry the copy after the other operation finishes'
+    fi
+else
+    lock_dir="$cache_dir/.copy-gif.lockdir"
+    if ! mkdir -- "$lock_dir" 2>/dev/null; then
+        die 'GIF cache is busy; retry the copy after the other operation finishes'
+    fi
+    lock_held=1
+fi
+
+validate_gif() {
+    local file=$1
+    local label=$2
+    local size
+    local magic
+
+    if [[ ! -f "$file" || -L "$file" ]]; then
+        die "$label file is not a regular file; retry the download"
+    fi
+
+    if ! size=$(wc -c <"$file"); then
+        die "cannot read the $label GIF; check cache permissions and retry"
+    fi
+    size=${size//[[:space:]]/}
+    if [[ ! "$size" =~ ^[0-9]+$ ]] || ((size == 0)); then
+        die "$label file is empty; retry the download"
+    fi
+    if ((size > download_max_bytes)); then
+        die "$label file exceeds the 15 MiB download limit; choose a smaller GIF"
+    fi
+
+    if ! magic=$(head -c 6 -- "$file" 2>/dev/null); then
+        die "cannot inspect the $label GIF; check cache permissions and retry"
+    fi
+    if [[ "$magic" != 'GIF87a' && "$magic" != 'GIF89a' ]]; then
+        die "$label file is not a GIF; expected GIF87a or GIF89a magic"
+    fi
+}
+
+if [[ -e "$target" || -L "$target" ]]; then
+    # Never trust a cache hit without checking its type, size, and signature.
+    validate_gif "$target" cached
+else
+    if ! tmp_file=$(mktemp "$cache_dir/.copy-gif.XXXXXX"); then
+        die 'cannot create a temporary GIF in the cache directory; check its permissions'
+    fi
+
+    curl_args=(
+        --fail
+        --silent
+        --show-error
+        --location
+        --connect-timeout 8
+        --max-time 15
+        --max-filesize "$download_max_bytes"
+        --url "$url"
+        --output "$tmp_file"
+    )
+    if ! curl "${curl_args[@]}"; then
+        if [[ -f "$tmp_file" ]]; then
+            failed_size=$(wc -c <"$tmp_file" 2>/dev/null || true)
+            failed_size=${failed_size//[[:space:]]/}
+            if [[ "$failed_size" =~ ^[0-9]+$ ]] && ((failed_size > download_max_bytes)); then
+                die 'download exceeds the 15 MiB limit; choose a smaller GIF'
+            fi
+        fi
+        die 'download failed; check the URL, network connection, and provider response'
+    fi
+
+    validate_gif "$tmp_file" downloaded
+    if ! mv -f -- "$tmp_file" "$target"; then
+        die 'cannot atomically cache the GIF; check cache permissions and retry'
+    fi
+    tmp_file=''
+fi
+
+clipboard_helper=${LOOPBOX_CLIPBOARD_HELPER:-$default_clipboard_helper}
+if [[ ! -x "$clipboard_helper" ]]; then
+    die 'clipboard helper is unavailable; install Omarchy or set LOOPBOX_CLIPBOARD_HELPER to an executable helper'
+fi
+
+if ! "$clipboard_helper" --copy-only image/gif "$target" >/dev/null; then
+    die 'clipboard copy failed; verify the Wayland session and clipboard helper'
+fi
+
+prune_cache() {
+    local -a entries=()
+    local entry
+    local file
+    local size
+    local total=0
+    local count=0
+
+    mapfile -d '' entries < <(find "$cache_dir" -maxdepth 1 -type f -name '*.gif' -printf '%T@ %p\0' | sort -z -n)
+
+    for entry in "${entries[@]}"; do
+        file=${entry#* }
+        [[ -f "$file" && ! -L "$file" ]] || continue
+        if ! size=$(wc -c <"$file"); then
+            die 'cannot inspect a cached GIF while pruning; retry the copy'
+        fi
+        size=${size//[[:space:]]/}
+        [[ "$size" =~ ^[0-9]+$ ]] || die 'cached GIF size is unreadable; retry the copy'
+        count=$((count + 1))
+        total=$((total + size))
+    done
+
+    if ((count <= max_files && total <= cache_max_bytes)); then
+        return
+    fi
+
+    for entry in "${entries[@]}"; do
+        ((count > max_files || total > cache_max_bytes)) || break
+        file=${entry#* }
+        [[ "$file" == "$target" ]] && continue
+        [[ -f "$file" && ! -L "$file" ]] || continue
+
+        if ! size=$(wc -c <"$file"); then
+            die 'cannot inspect a cached GIF while pruning; retry the copy'
+        fi
+        size=${size//[[:space:]]/}
+        [[ "$size" =~ ^[0-9]+$ ]] || die 'cached GIF size is unreadable; retry the copy'
+        if ! rm -f -- "$file"; then
+            die 'cannot prune an old cached GIF; check cache permissions and retry'
+        fi
+        count=$((count - 1))
+        total=$((total - size))
+    done
+
+    if ((count > max_files || total > cache_max_bytes)); then
+        die 'GIF cache remains over its size limit because the current file must be retained'
+    fi
+}
+
+prune_cache
+printf '%s\n' "$target"

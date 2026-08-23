@@ -1,0 +1,91 @@
+{
+  "locale": "en",
+  "results": [
+    {
+      "id": "6039247074942322",
+      "title": "Weekend Over? Monday Arrives!",
+      "content_description": "",
+      "itemurl": "https://klipy.com/gifs/monday-71",
+      "url": "https://static.klipy.com/original/monday.gif",
+      "media_formats": {
+        "gif": {
+          "url": "https://static.klipy.com/original/monday.gif",
+          "dims": [498, 498],
+          "size": 4921058
+        },
+        "tinygif": {
+          "url": "https://static.klipy.com/tiny/monday.gif",
+          "dims": [220, 220],
+          "size": 240574
+        },
+        "nanogif": {
+          "url": "https://static.klipy.com/nano/monday.gif",
+          "dims": [90, 90],
+          "size": 51981
+        }
+      }
+    },
+    {
+      "id": "fallback-title",
+      "title": 42,
+      "content_description": "A useful fallback title",
+      "itemurl": "https://klipy.com/gifs/fallback-title",
+      "media_formats": {
+        "gif": {
+          "url": "https://static.klipy.com/original/fallback.gif",
+          "dims": ["not-a-width", 240],
+          "size": "not-a-size"
+        },
+        "tinygif": {
+          "url": "https://static.klipy.com/tiny/fallback.gif",
+          "dims": [160, 90],
+          "size": 1234
+        }
+      }
+    },
+    {
+      "id": 771,
+      "title": "Uses GIF preview when nano is unavailable",
+      "content_description": "",
+      "itemurl": "not-a-url",
+      "media_formats": {
+        "gif": {
+          "url": "https://static.klipy.com/original/preview-fallback.gif",
+          "dims": [320, 180],
+          "size": 2048
+        },
+        "nanogif": {
+          "url": "",
+          "dims": [90, 50],
+          "size": 100
+        }
+      }
+    },
+    {
+      "id": "missing-original",
+      "title": "This record must be ignored",
+      "itemurl": "https://klipy.com/gifs/missing-original",
+      "media_formats": {
+        "nanogif": {
+          "url": "https://static.klipy.com/nano/only.gif",
+          "dims": [90, 90],
+          "size": 100
+        }
+      }
+    },
+    {
+      "id": null,
+      "title": "This record has no stable id",
+      "itemurl": "https://klipy.com/gifs/missing-id",
+      "media_formats": {
+        "gif": {
+          "url": "https://static.klipy.com/original/no-id.gif",
+          "dims": [100, 100],
+          "size": 100
+        }
+      }
+    },
+    null
+  ],
+  "next": "Mg=="
+}
