@@ -21,12 +21,18 @@ Item {
   property int selectedIndex: 0
   property bool loading: false
   property bool copying: false
+  property int copyingIndex: -1
   property string statusMessage: ""
   property bool statusError: false
   property int requestSerial: 0
   property var state: LoopboxModel.defaultState()
   property bool stateDirectoryReady: false
   property bool stateSavePending: false
+  property bool dismissAfterStateSave: false
+  property string stateSaveContext: ""
+  property string stateStorageError: ""
+  property string persistedStateText: ""
+  property string pendingStateText: ""
 
   readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")
   readonly property string stateDirectory: stateHome + "/loopbox"
@@ -53,8 +59,8 @@ Item {
     root.query = ""
     root.viewMode = "trending"
     root.selectedIndex = 0
-    root.statusMessage = "Trending GIFs"
-    root.statusError = false
+    root.statusMessage = root.stateStorageError || "Trending GIFs"
+    root.statusError = Boolean(root.stateStorageError)
     resultModel.clear()
     root.requestSerial += 1
     root.startSearch(root.requestSerial, "")
@@ -73,6 +79,7 @@ Item {
     if (linkProc.running) linkProc.running = false
     root.loading = false
     root.copying = false
+    root.copyingIndex = -1
     root.opened = false
   }
 
@@ -130,19 +137,60 @@ Item {
   function loadFavorites() {
     root.replaceResults(root.state.favorites || [])
     root.loading = false
-    root.statusError = false
-    root.statusMessage = resultModel.count > 0
+    root.statusError = Boolean(root.stateStorageError)
+    root.statusMessage = root.stateStorageError || (resultModel.count > 0
       ? resultModel.count + (resultModel.count === 1 ? " favourite" : " favourites")
-      : "No favourites yet. Select a GIF and press Ctrl+Shift+F."
+      : "No favourites yet. Select a GIF and press Ctrl+Shift+F.")
   }
 
-  function saveState() {
+  function saveState(context, dismissWhenSaved) {
+    root.stateSaveContext = String(context || "state")
+    root.dismissAfterStateSave = Boolean(dismissWhenSaved)
+    root.stateSavePending = true
+    root.pendingStateText = LoopboxModel.serializeState(root.state) + "\n"
     if (!root.stateDirectoryReady) {
-      root.stateSavePending = true
       return
     }
-    stateFile.setText(LoopboxModel.serializeState(root.state) + "\n")
+    if (root.pendingStateText === root.persistedStateText) {
+      Qt.callLater(function() { root.finishStateSave() })
+      return
+    }
+    stateFile.setText(root.pendingStateText)
+  }
+
+  function stateSaveBlocksAction() {
+    if (!root.stateSavePending) return false
+    root.statusError = false
+    root.statusMessage = "Finishing the previous state save"
+    return true
+  }
+
+  function reportStateSaveFailure() {
+    var context = root.stateSaveContext || "state"
+    var copied = root.dismissAfterStateSave
     root.stateSavePending = false
+    root.dismissAfterStateSave = false
+    root.stateSaveContext = ""
+    root.pendingStateText = ""
+    root.stateStorageError = "Could not save Loopbox " + context + ". Check " + root.stateDirectory + " permissions."
+    if (root.opened) {
+      root.statusError = true
+      root.statusMessage = copied
+        ? "Copied, but " + root.stateStorageError.charAt(0).toLowerCase() + root.stateStorageError.slice(1)
+        : root.stateStorageError
+    }
+  }
+
+  function finishStateSave() {
+    if (!root.stateSavePending) return
+    root.persistedStateText = root.pendingStateText
+    root.pendingStateText = ""
+    root.stateSavePending = false
+    root.stateStorageError = ""
+    var shouldDismiss = root.dismissAfterStateSave
+    root.dismissAfterStateSave = false
+    root.stateSaveContext = ""
+    if (shouldDismiss) dismissTimer.restart()
   }
 
   function selectedIsFavorite() {
@@ -153,9 +201,10 @@ Item {
   function toggleSelectedFavorite() {
     var result = root.resultAt(root.selectedIndex)
     if (!result || root.copying) return
+    if (root.stateSaveBlocksAction()) return
     var wasFavorite = LoopboxModel.isFavorite(root.state, result)
     root.state = LoopboxModel.toggleFavorite(root.state, result)
-    root.saveState()
+    root.saveState("favourites", false)
     root.statusError = false
     root.statusMessage = wasFavorite ? "Removed from favourites" : "Added to favourites"
     if (root.viewMode === "favorites") root.loadFavorites()
@@ -246,6 +295,7 @@ Item {
   function copyGif(index) {
     var result = root.resultAt(index)
     if (!result || root.copying || !result.originalUrl) return
+    if (root.stateSaveBlocksAction()) return
     if (!root.pluginDirectory) {
       root.statusError = true
       root.statusMessage = "Loopbox could not locate its GIF copy helper."
@@ -254,6 +304,7 @@ Item {
     copyProc.pendingResult = result
     copyProc.command = [root.copyScript, result.originalUrl, result.provider, result.id]
     root.copying = true
+    root.copyingIndex = index
     root.statusError = false
     root.statusMessage = "Downloading and copying GIF"
     copyProc.running = true
@@ -262,6 +313,7 @@ Item {
   function copyLink(index) {
     var result = root.resultAt(index)
     if (!result || root.copying) return
+    if (root.stateSaveBlocksAction()) return
     var url = result.shareUrl || result.originalUrl
     if (!url) {
       root.statusError = true
@@ -269,7 +321,9 @@ Item {
       return
     }
     linkProc.command = ["wl-copy", "--type", "text/plain;charset=utf-8", url]
+    linkProc.pendingResult = result
     root.copying = true
+    root.copyingIndex = index
     root.statusError = false
     root.statusMessage = "Copying GIF link"
     linkProc.running = true
@@ -299,11 +353,20 @@ Item {
     onExited: function(exitCode) {
       root.stateDirectoryReady = exitCode === 0
       if (root.stateDirectoryReady) {
-        stateFile.reload()
-        if (root.stateSavePending) root.saveState()
-      } else if (root.opened) {
-        root.statusError = true
-        root.statusMessage = "Could not open Loopbox state storage. Favourites will not persist."
+        if (root.stateSavePending)
+          root.saveState(root.stateSaveContext, root.dismissAfterStateSave)
+        else
+          stateFile.reload()
+      } else {
+        root.stateStorageError = "Could not access Loopbox state storage. Check " + root.stateDirectory + " permissions."
+        if (root.stateSavePending) {
+          root.reportStateSaveFailure()
+          return
+        }
+        if (root.opened) {
+          root.statusError = true
+          root.statusMessage = root.stateStorageError
+        }
       }
     }
   }
@@ -315,10 +378,26 @@ Item {
     atomicWrites: true
     printErrors: false
     onLoaded: {
+      root.stateStorageError = ""
       root.state = LoopboxModel.parseState(text())
+      root.persistedStateText = LoopboxModel.serializeState(root.state) + "\n"
       if (root.opened && root.viewMode === "favorites") root.loadFavorites()
     }
-    onLoadFailed: root.state = LoopboxModel.defaultState()
+    onLoadFailed: function(error) {
+      root.state = LoopboxModel.defaultState()
+      root.persistedStateText = ""
+      if (error !== FileViewError.FileNotFound) {
+        root.stateStorageError = "Could not read Loopbox state. Check " + root.statePath + " permissions."
+        if (root.opened) {
+          root.statusError = true
+          root.statusMessage = root.stateStorageError
+        }
+      }
+    }
+    onSaved: root.finishStateSave()
+    onSaveFailed: function(error) {
+      root.reportStateSaveFailure()
+    }
     onFileChanged: reload()
   }
 
@@ -357,8 +436,10 @@ Item {
       try {
         var rows = Klipy.parseResponse(searchStdout.text)
         root.replaceResults(rows)
-        root.statusError = false
-        if (resultModel.count === 0) {
+        root.statusError = Boolean(root.stateStorageError)
+        if (root.stateStorageError) {
+          root.statusMessage = root.stateStorageError
+        } else if (resultModel.count === 0) {
           root.statusMessage = root.query ? "No GIFs found. Try another search." : "No trending GIFs are available. Press Ctrl+R to retry."
         } else if (root.query) {
           root.statusMessage = resultModel.count + (resultModel.count === 1 ? " result for " : " results for ") + root.query
@@ -378,6 +459,7 @@ Item {
     stderr: StdioCollector { id: copyStderr; waitForEnd: true }
     onExited: function(exitCode, exitStatus) {
       root.copying = false
+      root.copyingIndex = -1
       if (!root.opened) return
       if (exitCode !== 0 || exitStatus !== 0) {
         var detail = String(copyStderr.text || "").trim()
@@ -386,27 +468,30 @@ Item {
         return
       }
       root.state = LoopboxModel.addRecent(root.state, pendingResult)
-      root.saveState()
       root.statusError = false
       root.statusMessage = "GIF copied to the clipboard"
-      dismissTimer.restart()
+      root.saveState("recents", true)
     }
   }
 
   Process {
     id: linkProc
+    property var pendingResult: null
     stderr: StdioCollector { id: linkStderr; waitForEnd: true }
+    // Dismiss only after the copied link has also reached recents on disk.
     onExited: function(exitCode, exitStatus) {
       root.copying = false
+      root.copyingIndex = -1
       if (!root.opened) return
       if (exitCode !== 0 || exitStatus !== 0) {
         root.statusError = true
         root.statusMessage = "Could not copy the GIF link. Check that wl-copy is installed and try again."
         return
       }
+      root.state = LoopboxModel.addRecent(root.state, pendingResult)
       root.statusError = false
       root.statusMessage = "GIF link copied to the clipboard"
-      dismissTimer.restart()
+      root.saveState("recents", true)
     }
   }
 
@@ -601,6 +686,7 @@ Item {
               width: resultGrid.cellWidth - Style.spacing.sm
               height: resultGrid.cellHeight - Style.spacing.sm
               selected: index === root.selectedIndex
+              busy: root.copying && index === root.copyingIndex
               favourite: {
                 var row = root.resultAt(index)
                 return row ? LoopboxModel.isFavorite(root.state, row) : false

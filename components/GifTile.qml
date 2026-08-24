@@ -9,6 +9,7 @@ Rectangle {
   required property string previewUrl
   required property bool selected
   property bool favourite: false
+  property bool busy: false
   property bool pooled: false
   property bool previewFailed: false
   property color foreground: Color.menu.text
@@ -47,12 +48,41 @@ Rectangle {
     asynchronous: true
     cache: true
     playing: !tile.pooled && tile.inViewport && status === AnimatedImage.Ready
+    opacity: tile.busy ? 0.55 : 1
+
+    Behavior on opacity { NumberAnimation { duration: 100 } }
 
     onSourceChanged: tile.previewFailed = false
     onStatusChanged: {
       if (status === AnimatedImage.Error && !tile.previewFailed) {
         tile.previewFailed = true
         tile.imageFailed(tile.index)
+      }
+    }
+  }
+
+  Rectangle {
+    anchors.centerIn: parent
+    width: Style.space(42)
+    height: width
+    radius: width / 2
+    color: Util.alpha(Color.background, 0.86)
+    visible: tile.busy
+    z: 3
+
+    Text {
+      anchors.centerIn: parent
+      text: "󰔟"
+      color: tile.selectedForeground
+      font.family: Style.font.menuFamily
+      font.pixelSize: Style.font.heading
+
+      RotationAnimator on rotation {
+        from: 0
+        to: 360
+        duration: 850
+        loops: Animation.Infinite
+        running: tile.busy
       }
     }
   }
@@ -129,7 +159,7 @@ Rectangle {
     anchors.fill: parent
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
-    onContainsMouseChanged: if (containsMouse) tile.hovered(tile.index)
+    onPositionChanged: tile.hovered(tile.index)
     onClicked: tile.activated(tile.index)
   }
 

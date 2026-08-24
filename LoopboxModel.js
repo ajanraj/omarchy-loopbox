@@ -118,22 +118,6 @@ function serializeState(state) {
   return JSON.stringify(normalizeState(state));
 }
 
-function listForFavorites(stateOrFavorites) {
-  if (Array.isArray(stateOrFavorites)) {
-    return stateOrFavorites;
-  }
-  return isObject(stateOrFavorites) && Array.isArray(stateOrFavorites.favorites)
-    ? stateOrFavorites.favorites
-    : [];
-}
-
-function stateForMutation(stateOrFavorites) {
-  if (Array.isArray(stateOrFavorites)) {
-    return null;
-  }
-  return normalizeState(stateOrFavorites);
-}
-
 function findRecordIndex(records, target) {
   var key = recordKey(target);
   if (!key) {
@@ -147,25 +131,17 @@ function findRecordIndex(records, target) {
   return -1;
 }
 
-function isFavorite(stateOrFavorites, maybeResult) {
-  var favorites = stateOrFavorites;
-  var target = maybeResult;
-  // Accept the natural `(state, result)` form and the convenient
-  // `(result, favorites)` form for QML delegates.
-  if (!Array.isArray(favorites) && isObject(favorites) && Array.isArray(favorites.favorites)) {
-    favorites = favorites.favorites;
-  } else if (isObject(favorites) && !Array.isArray(favorites) && Array.isArray(maybeResult)) {
-    target = stateOrFavorites;
-    favorites = maybeResult;
-  }
-  return findRecordIndex(dedupeRecords(favorites, MAX_FAVORITES), target) !== -1;
+function isFavorite(state, result) {
+  var normalized = normalizeState(state);
+  return findRecordIndex(normalized.favorites, result) !== -1;
 }
 
-function toggleFavorite(stateOrFavorites, result) {
+function toggleFavorite(state, result) {
+  var next = normalizeState(state);
   var target = normalizeRecord(result);
-  var source = dedupeRecords(listForFavorites(stateOrFavorites), MAX_FAVORITES);
+  var source = next.favorites.slice();
   if (!target) {
-    return Array.isArray(stateOrFavorites) ? source : normalizeState(stateOrFavorites);
+    return next;
   }
 
   var index = findRecordIndex(source, target);
@@ -176,26 +152,14 @@ function toggleFavorite(stateOrFavorites, result) {
     source = source.slice(0, MAX_FAVORITES);
   }
 
-  if (Array.isArray(stateOrFavorites)) {
-    return source;
-  }
-  var state = stateForMutation(stateOrFavorites);
-  state.favorites = source;
-  return state;
+  next.favorites = source;
+  return next;
 }
 
-function listForRecents(stateOrRecents) {
-  if (Array.isArray(stateOrRecents)) {
-    return stateOrRecents;
-  }
-  return isObject(stateOrRecents) && Array.isArray(stateOrRecents.recents)
-    ? stateOrRecents.recents
-    : [];
-}
-
-function addRecent(stateOrRecents, result) {
+function addRecent(state, result) {
+  var next = normalizeState(state);
   var target = normalizeRecord(result);
-  var source = dedupeRecords(listForRecents(stateOrRecents), MAX_RECENTS);
+  var source = next.recents.slice();
   if (target) {
     source = source.filter(function (record) {
       return recordKey(record) !== recordKey(target);
@@ -204,12 +168,8 @@ function addRecent(stateOrRecents, result) {
     source = source.slice(0, MAX_RECENTS);
   }
 
-  if (Array.isArray(stateOrRecents)) {
-    return source;
-  }
-  var state = stateForMutation(stateOrRecents);
-  state.recents = source;
-  return state;
+  next.recents = source;
+  return next;
 }
 
 function normalizedDirection(direction) {
@@ -281,15 +241,6 @@ function navigate(index, direction, itemCount, columns) {
   return current;
 }
 
-// Descriptive aliases make the same pure operation easy to call from QML.
-function moveSelection(index, direction, itemCount, columns) {
-  return navigate(index, direction, itemCount, columns);
-}
-
-function navigationIndex(index, direction, itemCount, columns) {
-  return navigate(index, direction, itemCount, columns);
-}
-
 var api = {
   STATE_VERSION: STATE_VERSION,
   MAX_FAVORITES: MAX_FAVORITES,
@@ -303,8 +254,6 @@ var api = {
   toggleFavorite: toggleFavorite,
   addRecent: addRecent,
   navigate: navigate,
-  moveSelection: moveSelection,
-  navigationIndex: navigationIndex,
 };
 
 if (typeof module !== "undefined" && module.exports) {

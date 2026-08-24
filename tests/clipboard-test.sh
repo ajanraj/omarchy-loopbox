@@ -72,6 +72,11 @@ if [[ "$#" -ne 3 || "$1" != '--copy-only' || "$2" != 'image/gif' ]]; then
     exit 64
 fi
 
+if [[ -n "${FAKE_LOCK_PATH:-}" ]] && ! flock -n "$FAKE_LOCK_PATH" true; then
+    printf 'cache lock was inherited by the clipboard helper\n' >&2
+    exit 65
+fi
+
 printf '%s|%s|%s\n' "$1" "$2" "$3" >>"$FAKE_CLIPBOARD_LOG"
 if [[ "${FAKE_CLIPBOARD_MODE:-ok}" == 'fail' ]]; then
     printf 'simulated clipboard failure\n' >&2
@@ -153,45 +158,52 @@ export FAKE_CLIPBOARD_LOG="$clipboard_log"
 export FAKE_CLIPBOARD_CAPTURE="$clipboard_capture"
 export FAKE_CURL_COUNT_FILE="$curl_count_file"
 export FAKE_CURL_URL_LOG="$curl_url_log"
+export FAKE_LOCK_PATH="$cache_dir/.copy-gif.lock"
 
 success_stdout="$test_root/success.stdout"
 success_stderr="$test_root/success.stderr"
-FAKE_CURL_MODE=gif "$copy_gif" '-remote-url' klipy first >"$success_stdout" 2>"$success_stderr"
+test_url='https://example.invalid/-remote-url'
+FAKE_CURL_MODE=gif "$copy_gif" "$test_url" klipy first >"$success_stdout" 2>"$success_stderr"
 expected_path="$cache_dir/klipy-first.gif"
 assert_eq "$expected_path" "$(<"$success_stdout")" 'success must print only the cached path'
 assert_eq 'GIF89a test payload' "$(<"$clipboard_capture")" 'clipboard helper must receive the original bytes'
 assert_file_contains '--copy-only|image/gif|' "$clipboard_log" 'clipboard helper must receive copy-only image/gif arguments'
 assert_file_contains "$expected_path" "$clipboard_log" 'clipboard helper must receive the cached path'
-assert_eq '-remote-url' "$(<"$curl_url_log")" 'URL beginning with punctuation must be passed as a --url value'
+assert_eq "$test_url" "$(<"$curl_url_log")" 'remote URL must be passed as one --url value'
 
 curl_count_after_download=$(<"$curl_count_file")
-FAKE_CURL_MODE=http-fail "$copy_gif" '-remote-url' klipy first >"$test_root/cache-hit.stdout" 2>"$test_root/cache-hit.stderr"
+FAKE_CURL_MODE=http-fail "$copy_gif" "$test_url" klipy first >"$test_root/cache-hit.stdout" 2>"$test_root/cache-hit.stderr"
 assert_eq "$expected_path" "$(<"$test_root/cache-hit.stdout")" 'cache hit must still copy and print the cached path'
 assert_eq "$curl_count_after_download" "$(<"$curl_count_file")" 'cache hit must not download again'
 
-FAKE_CURL_MODE=bad run_failure "$test_root/bad.stdout" "$test_root/bad.stderr" '-remote-url' klipy bad
+fallback_home="$test_root/home"
+mkdir -p -- "$fallback_home"
+fallback_path=$(HOME="$fallback_home" XDG_CACHE_HOME= FAKE_CURL_MODE=gif "$copy_gif" "$test_url" klipy fallback)
+assert_eq "$fallback_home/.cache/loopbox/gifs/klipy-fallback.gif" "$fallback_path" 'unset XDG_CACHE_HOME must use the standard HOME/.cache fallback'
+
+FAKE_CURL_MODE=bad run_failure "$test_root/bad.stdout" "$test_root/bad.stderr" "$test_url" klipy bad
 (( RUN_STATUS != 0 )) || fail 'invalid GIF magic must fail'
 assert_eq '' "$(<"$test_root/bad.stdout")" 'invalid GIF magic must not report success'
 assert_file_not_contains 'klipy-bad.gif' "$clipboard_log" 'invalid GIF magic must not reach the clipboard helper'
 assert_file_contains 'GIF87a or GIF89a' "$test_root/bad.stderr" 'invalid GIF error must explain the accepted signatures'
 
 count_before_unsafe=$(<"$curl_count_file")
-FAKE_CURL_MODE=gif run_failure "$test_root/unsafe-provider.stdout" "$test_root/unsafe-provider.stderr" '-remote-url' '../klipy' safe
+FAKE_CURL_MODE=gif run_failure "$test_root/unsafe-provider.stdout" "$test_root/unsafe-provider.stderr" "$test_url" '../klipy' safe
 (( RUN_STATUS != 0 )) || fail 'unsafe provider segment must fail'
 assert_eq '' "$(<"$test_root/unsafe-provider.stdout")" 'unsafe provider must not report success'
-FAKE_CURL_MODE=gif run_failure "$test_root/unsafe-id.stdout" "$test_root/unsafe-id.stderr" '-remote-url' klipy 'bad/id'
+FAKE_CURL_MODE=gif run_failure "$test_root/unsafe-id.stdout" "$test_root/unsafe-id.stderr" "$test_url" klipy 'bad/id'
 (( RUN_STATUS != 0 )) || fail 'unsafe id segment must fail'
 assert_eq '' "$(<"$test_root/unsafe-id.stdout")" 'unsafe id must not report success'
 assert_eq "$count_before_unsafe" "$(<"$curl_count_file")" 'unsafe path segments must be rejected before downloading'
 assert_file_contains 'unsafe provider segment' "$test_root/unsafe-provider.stderr" 'unsafe provider error must explain recovery'
 
-FAKE_CURL_MODE=http-fail run_failure "$test_root/http-fail.stdout" "$test_root/http-fail.stderr" '-remote-url' klipy network-failure
+FAKE_CURL_MODE=http-fail run_failure "$test_root/http-fail.stdout" "$test_root/http-fail.stderr" "$test_url" klipy network-failure
 (( RUN_STATUS != 0 )) || fail 'HTTP/download failure must fail'
 assert_eq '' "$(<"$test_root/http-fail.stdout")" 'HTTP/download failure must not report success'
 assert_file_not_contains 'klipy-network-failure.gif' "$clipboard_log" 'HTTP/download failure must not reach the clipboard helper'
 assert_file_contains 'download failed' "$test_root/http-fail.stderr" 'HTTP/download error must explain recovery'
 
-FAKE_CURL_MODE=oversize run_failure "$test_root/oversize.stdout" "$test_root/oversize.stderr" '-remote-url' klipy too-large
+FAKE_CURL_MODE=oversize run_failure "$test_root/oversize.stdout" "$test_root/oversize.stderr" "$test_url" klipy too-large
 (( RUN_STATUS != 0 )) || fail 'oversize download must fail'
 assert_eq '' "$(<"$test_root/oversize.stdout")" 'oversize download must not report success'
 assert_file_contains '15 MiB' "$test_root/oversize.stderr" 'oversize error must name the size limit'
@@ -199,13 +211,17 @@ assert_file_contains '15 MiB' "$test_root/oversize.stderr" 'oversize error must 
 
 printf 'not a gif\n' >"$cache_dir/klipy-invalid-cache.gif"
 count_before_invalid_cache=$(<"$curl_count_file")
-FAKE_CURL_MODE=http-fail run_failure "$test_root/invalid-cache.stdout" "$test_root/invalid-cache.stderr" '-remote-url' klipy invalid-cache
-(( RUN_STATUS != 0 )) || fail 'invalid cache hit must fail validation'
-assert_eq '' "$(<"$test_root/invalid-cache.stdout")" 'invalid cache hit must not report success'
-assert_eq "$count_before_invalid_cache" "$(<"$curl_count_file")" 'invalid cache hit must not download over the invalid file'
-assert_file_contains 'cached file is not a GIF' "$test_root/invalid-cache.stderr" 'invalid cache error must identify the cache file'
+FAKE_CURL_MODE=gif "$copy_gif" "$test_url" klipy invalid-cache >"$test_root/invalid-cache.stdout" 2>"$test_root/invalid-cache.stderr"
+assert_eq "$((count_before_invalid_cache + 1))" "$(<"$curl_count_file")" 'invalid cache hit must download a clean replacement'
+assert_eq 'GIF89a test payload' "$(<"$cache_dir/klipy-invalid-cache.gif")" 'invalid cache hit must be replaced atomically'
 
-FAKE_CURL_MODE=gif FAKE_CLIPBOARD_MODE=fail run_failure "$test_root/clipboard-fail.stdout" "$test_root/clipboard-fail.stderr" '-remote-url' klipy clipboard-failure
+count_before_bad_url=$(<"$curl_count_file")
+FAKE_CURL_MODE=gif run_failure "$test_root/bad-url.stdout" "$test_root/bad-url.stderr" 'file:///tmp/local.gif' klipy local
+(( RUN_STATUS != 0 )) || fail 'non-HTTP URL must fail'
+assert_eq "$count_before_bad_url" "$(<"$curl_count_file")" 'non-HTTP URL must be rejected before downloading'
+assert_file_contains 'http or https' "$test_root/bad-url.stderr" 'non-HTTP URL error must explain recovery'
+
+FAKE_CURL_MODE=gif FAKE_CLIPBOARD_MODE=fail run_failure "$test_root/clipboard-fail.stdout" "$test_root/clipboard-fail.stderr" "$test_url" klipy clipboard-failure
 (( RUN_STATUS != 0 )) || fail 'clipboard failure must fail'
 assert_eq '' "$(<"$test_root/clipboard-fail.stdout")" 'clipboard failure must not report success'
 assert_file_contains 'clipboard copy failed' "$test_root/clipboard-fail.stderr" 'clipboard error must explain recovery'
@@ -219,7 +235,7 @@ for index in $(seq -w 1 11); do
     truncate -s 15728640 "$large_file"
     printf 'GIF89a' | dd of="$large_file" bs=1 conv=notrunc status=none
 done
-FAKE_CURL_MODE=gif FAKE_CLIPBOARD_MODE=ok "$copy_gif" '-remote-url' klipy prune >"$test_root/prune.stdout" 2>"$test_root/prune.stderr"
+FAKE_CURL_MODE=gif FAKE_CLIPBOARD_MODE=ok "$copy_gif" "$test_url" klipy prune >"$test_root/prune.stdout" 2>"$test_root/prune.stderr"
 gif_count=$(find "$cache_dir" -maxdepth 1 -type f -name '*.gif' -print | wc -l)
 (( gif_count <= 20 )) || fail 'pruning must keep no more than 20 cached GIFs'
 [[ ! -e "$cache_dir/klipy-old-01.gif" ]] || fail 'pruning must remove the oldest cached GIF first'

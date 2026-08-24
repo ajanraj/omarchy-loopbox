@@ -182,5 +182,11 @@ assert.strictEqual(state.recents[19].id, "recent-1");
 state = Model.addRecent(state, recentRecords[5]);
 assert.strictEqual(state.recents[0].id, "recent-5");
 assert.strictEqual(state.recents.filter((item) => item.id === "recent-5").length, 1);
+const repeatedRecent = Model.addRecent(state, recentRecords[5]);
+assert.strictEqual(
+  Model.serializeState(repeatedRecent),
+  Model.serializeState(state),
+  "re-copying the most recent GIF must be a semantic state no-op",
+);
 
 console.log("model/provider tests passed");

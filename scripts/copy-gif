@@ -21,6 +21,7 @@ provider=$2
 gif_id=$3
 
 [[ -n "$url" ]] || die 'URL must not be empty; provide the original GIF URL'
+[[ "$url" =~ ^https?://[^[:space:]]+$ ]] || die 'URL must use http or https and contain no whitespace'
 
 validate_segment() {
     local kind=$1
@@ -34,7 +35,7 @@ validate_segment() {
 validate_segment provider "$provider"
 validate_segment id "$gif_id"
 
-cache_root=${XDG_CACHE_HOME:-${HOME:-}}
+cache_root=${XDG_CACHE_HOME:-${HOME:+$HOME/.cache}}
 [[ -n "$cache_root" ]] || die 'XDG_CACHE_HOME or HOME must be set so the GIF can be cached'
 
 cache_dir="$cache_root/loopbox/gifs"
@@ -55,13 +56,23 @@ cleanup() {
     if [[ -n "$tmp_file" && -e "$tmp_file" ]]; then
         rm -f -- "$tmp_file" || true
     fi
-    if ((lock_held)); then
-        rmdir -- "$lock_dir" 2>/dev/null || true
-    fi
+    release_lock || true
 
     return "$exit_status"
 }
 trap cleanup EXIT
+
+release_lock() {
+    if [[ -n "$lock_fd" ]]; then
+        flock -u "$lock_fd" || return 1
+        exec {lock_fd}>&-
+        lock_fd=''
+    fi
+    if ((lock_held)); then
+        rmdir -- "$lock_dir" 2>/dev/null || return 1
+        lock_held=0
+    fi
+}
 
 # flock is part of the normal Linux userspace. The mkdir fallback keeps two
 # helper processes from pruning one another's current files on minimal hosts.
@@ -88,32 +99,47 @@ validate_gif() {
     local magic
 
     if [[ ! -f "$file" || -L "$file" ]]; then
-        die "$label file is not a regular file; retry the download"
+        validation_error="$label file is not a regular file"
+        return 1
     fi
 
     if ! size=$(wc -c <"$file"); then
-        die "cannot read the $label GIF; check cache permissions and retry"
+        validation_error="cannot read the $label GIF"
+        return 1
     fi
     size=${size//[[:space:]]/}
     if [[ ! "$size" =~ ^[0-9]+$ ]] || ((size == 0)); then
-        die "$label file is empty; retry the download"
+        validation_error="$label file is empty"
+        return 1
     fi
     if ((size > download_max_bytes)); then
-        die "$label file exceeds the 15 MiB download limit; choose a smaller GIF"
+        validation_error="$label file exceeds the 15 MiB download limit"
+        return 1
     fi
 
     if ! magic=$(head -c 6 -- "$file" 2>/dev/null); then
-        die "cannot inspect the $label GIF; check cache permissions and retry"
+        validation_error="cannot inspect the $label GIF"
+        return 1
     fi
     if [[ "$magic" != 'GIF87a' && "$magic" != 'GIF89a' ]]; then
-        die "$label file is not a GIF; expected GIF87a or GIF89a magic"
+        validation_error="$label file is not a GIF; expected GIF87a or GIF89a magic"
+        return 1
     fi
+
+    validation_error=''
+    return 0
 }
 
 if [[ -e "$target" || -L "$target" ]]; then
-    # Never trust a cache hit without checking its type, size, and signature.
-    validate_gif "$target" cached
-else
+    # A corrupt cache entry should heal on retry instead of poisoning this ID.
+    if ! validate_gif "$target" cached; then
+        if ! rm -f -- "$target"; then
+            die "$validation_error and could not be removed; check cache permissions"
+        fi
+    fi
+fi
+
+if [[ ! -e "$target" ]]; then
     if ! tmp_file=$(mktemp "$cache_dir/.copy-gif.XXXXXX"); then
         die 'cannot create a temporary GIF in the cache directory; check its permissions'
     fi
@@ -123,8 +149,8 @@ else
         --silent
         --show-error
         --location
-        --connect-timeout 8
-        --max-time 15
+        --connect-timeout 3
+        --max-time 8
         --max-filesize "$download_max_bytes"
         --url "$url"
         --output "$tmp_file"
@@ -140,21 +166,17 @@ else
         die 'download failed; check the URL, network connection, and provider response'
     fi
 
-    validate_gif "$tmp_file" downloaded
+    if ! validate_gif "$tmp_file" downloaded; then
+        die "$validation_error; retry or choose another GIF"
+    fi
     if ! mv -f -- "$tmp_file" "$target"; then
         die 'cannot atomically cache the GIF; check cache permissions and retry'
     fi
     tmp_file=''
 fi
 
-clipboard_helper=${LOOPBOX_CLIPBOARD_HELPER:-$default_clipboard_helper}
-if [[ ! -x "$clipboard_helper" ]]; then
-    die 'clipboard helper is unavailable; install Omarchy or set LOOPBOX_CLIPBOARD_HELPER to an executable helper'
-fi
-
-if ! "$clipboard_helper" --copy-only image/gif "$target" >/dev/null; then
-    die 'clipboard copy failed; verify the Wayland session and clipboard helper'
-fi
+# Treat the GIF just copied as the newest cache entry before pruning.
+touch -m -- "$target" || die 'cannot update the cached GIF timestamp; check cache permissions'
 
 prune_cache() {
     local -a entries=()
@@ -206,4 +228,18 @@ prune_cache() {
 }
 
 prune_cache
+
+# wl-copy daemonizes. Release first so its clipboard owner cannot inherit and
+# retain the cache lock for the lifetime of the clipboard contents.
+release_lock || die 'cannot release the GIF cache lock; retry the copy'
+
+clipboard_helper=${LOOPBOX_CLIPBOARD_HELPER:-$default_clipboard_helper}
+if [[ ! -x "$clipboard_helper" ]]; then
+    die 'clipboard helper is unavailable; install Omarchy or set LOOPBOX_CLIPBOARD_HELPER to an executable helper'
+fi
+
+if ! "$clipboard_helper" --copy-only image/gif "$target" >/dev/null; then
+    die 'clipboard copy failed; verify the Wayland session and clipboard helper'
+fi
+
 printf '%s\n' "$target"
