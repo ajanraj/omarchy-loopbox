@@ -4,7 +4,8 @@
 // not need to know about its URL or the provider response shape.
 var KLIPY_ENDPOINT = "https://gif-search.raycast.com/api/klipy";
 var DEFAULT_LIMIT = 8;
-var MAX_LIMIT = 50;
+var MAX_LIMIT = 8;
+var MAX_RESPONSE_BYTES = 256 * 1024;
 
 function safeLimit(limit) {
   var numeric = Number(limit);
@@ -36,6 +37,8 @@ function searchCommand(query, limit) {
     "3",
     "--max-time",
     "8",
+    "--max-filesize",
+    String(MAX_RESPONSE_BYTES),
     "--get",
     KLIPY_ENDPOINT,
     "--data-urlencode",

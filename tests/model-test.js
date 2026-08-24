@@ -2,7 +2,9 @@
 
 const assert = require("assert");
 const fs = require("fs");
+const http = require("http");
 const path = require("path");
+const { spawn } = require("child_process");
 const vm = require("vm");
 
 const root = path.resolve(__dirname, "..");
@@ -57,6 +59,8 @@ assert.deepStrictEqual(plain(searchArgv), [
   "3",
   "--max-time",
   "8",
+  "--max-filesize",
+  "262144",
   "--get",
   "https://gif-search.raycast.com/api/klipy",
   "--data-urlencode",
@@ -79,6 +83,8 @@ assert.deepStrictEqual(
     "3",
     "--max-time",
     "8",
+    "--max-filesize",
+    "262144",
     "--get",
     "https://gif-search.raycast.com/api/klipy",
     "--data-urlencode",
@@ -92,6 +98,10 @@ assert.deepStrictEqual(
 assert.deepStrictEqual(
   plain(Klipy.searchCommand("   ", 8).slice(-2)),
   ["--data-urlencode", "limit=8"],
+);
+assert.deepStrictEqual(
+  plain(Klipy.searchCommand("query", 100).slice(-4)),
+  ["--data-urlencode", "limit=8", "--data-urlencode", "q=query"],
 );
 
 // The live provider shape maps nanogif -> preview and gif -> original.
@@ -189,4 +199,67 @@ assert.strictEqual(
   "re-copying the most recent GIF must be a semantic state no-op",
 );
 
-console.log("model/provider tests passed");
+async function assertOversizedProviderResponseIsBounded() {
+  const maxFilesizeIndex = searchArgv.indexOf("--max-filesize");
+  assert.notStrictEqual(maxFilesizeIndex, -1);
+  const maxResponseBytes = Number(searchArgv[maxFilesizeIndex + 1]);
+  assert.strictEqual(maxResponseBytes, 256 * 1024);
+
+  const server = http.createServer((_request, response) => {
+    response.on("error", () => {});
+    response.writeHead(200, { "Content-Type": "application/json" });
+
+    const chunk = Buffer.alloc(16 * 1024, "x");
+    let remaining = maxResponseBytes * 2;
+    const write = () => {
+      while (remaining > 0) {
+        const bytes = Math.min(remaining, chunk.length);
+        remaining -= bytes;
+        if (!response.write(chunk.subarray(0, bytes))) {
+          response.once("drain", write);
+          return;
+        }
+      }
+      response.end();
+    };
+    write();
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const command = plain(Klipy.searchCommand("", 8));
+    const endpointIndex = command.indexOf("https://gif-search.raycast.com/api/klipy");
+    assert.notStrictEqual(endpointIndex, -1);
+    command[endpointIndex] = `http://127.0.0.1:${address.port}/oversized`;
+
+    const child = spawn(command[0], command.slice(1));
+    let stdoutBytes = 0;
+    let stderr = "";
+    child.stdout.on("data", (data) => { stdoutBytes += data.length; });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (data) => { stderr += data; });
+
+    const exitCode = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+
+    assert.strictEqual(exitCode, 63, stderr);
+    assert.ok(stdoutBytes <= maxResponseBytes, `${stdoutBytes} bytes exceeded the response cap`);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+assertOversizedProviderResponseIsBounded()
+  .then(() => console.log("model/provider tests passed"))
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });

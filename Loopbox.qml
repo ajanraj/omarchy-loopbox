@@ -394,8 +394,10 @@ Item {
     root.loading = true
   }
 
-  function providerFailure(message) {
+  function providerFailure(message, exitCode) {
     var detail = String(message || "").trim()
+    if (Number(exitCode) === 63)
+      return "GIF provider returned too much data. Try again later."
     if (detail.indexOf("429") !== -1)
       return "GIF search is rate limited. Wait a minute and press Ctrl+R."
     if (detail.indexOf("401") !== -1 || detail.indexOf("403") !== -1)
@@ -549,7 +551,7 @@ Item {
 
       if (exitCode !== 0 || exitStatus !== 0) {
         root.statusError = true
-        root.statusMessage = root.providerFailure(searchStderr.text)
+        root.statusMessage = root.providerFailure(searchStderr.text, exitCode)
         return
       }
 
