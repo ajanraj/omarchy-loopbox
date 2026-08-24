@@ -59,13 +59,9 @@ There is no first-party launcher QML entry point in the current `shell/plugins/`
 
 ### Shortcut
 
-The plugin contract does not declare a global hotkey. `Super+Ctrl+G` is free in the current Omarchy defaults and in Ajan's reachable bindings. Document this opt-in Hyprland binding:
+The plugin contract does not declare a global hotkey, and Omarchy's installer does not execute install hooks. Loopbox therefore ships a bar widget and asks for shortcut consent on first launch. `Super+Ctrl+Shift+L` is free in the current Omarchy defaults and in Ajan's live bindings. The picker checks `hyprctl binds -j` again before writing, names collisions, and accepts any letter with the `Super+Ctrl+Shift` modifiers.
 
-```lua
-o.bind("SUPER + CTRL + G", "Loopbox", "omarchy-shell shell toggle io.github.ajanraj.loopbox '{}'")
-```
-
-Do not write the user's Hyprland configuration during install. Marketplace submitters must affirm that the plugin does not overwrite user configuration without explicit consent. [Submission checklist](https://github.com/HANCORE-linux/omarchy-plugin-marketplace/blob/d4ce66d2384a0bf88f6db7097f2adeb62db72c41/SUBMISSION.md#L75-L84).
+Explicit confirmation writes a dedicated `~/.config/hypr/loopbox.lua` file and one marked loader block in the user's `bindings.lua`. The helper reloads Hyprland, checks for new configuration errors, and restores both files on failure. This meets the submission rule against changing user configuration without explicit consent. [Submission checklist](https://github.com/HANCORE-linux/omarchy-plugin-marketplace/blob/d4ce66d2384a0bf88f6db7097f2adeb62db72c41/SUBMISSION.md#L75-L84).
 
 ## Raycast product and architecture validation
 
@@ -189,19 +185,25 @@ Use this root manifest without adding speculative fields:
   "schemaVersion": 1,
   "id": "io.github.ajanraj.loopbox",
   "name": "Loopbox",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Ajan",
   "license": "MIT",
   "description": "Fast keyboard-first GIF picker and GIF search for Omarchy. Search reaction GIFs, trending GIFs, favourites, and copy GIFs or links directly to your Wayland clipboard.",
-  "kinds": ["overlay"],
-  "entryPoints": { "overlay": "Loopbox.qml" }
+  "kinds": ["overlay", "bar-widget"],
+  "entryPoints": { "overlay": "Loopbox.qml", "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Loopbox",
+    "category": "Launcher",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
 }
 ```
 
 Do not set `keepLoaded`. The shell creates the overlay on summon and destroys its GIF model after close. The process and state flow is:
 
 ```text
-Super+Ctrl+G
+Super+Ctrl+Shift+L or the Loopbox bar icon
   -> Omarchy shell loads Loopbox.qml
   -> 180 ms query debounce
   -> bounded curl Process calls providers/Klipy.js command
@@ -305,7 +307,7 @@ Errors should name impact and recovery:
 Preconditions: the target application has passed the raw GIF paste matrix and the chosen `this is fine` result still appears in the first eight KLIPY results. Do not warm the search or original-file cache for the take.
 
 1. Start with Discord or Slack open behind the desktop.
-2. Press `Super+Ctrl+G`.
+2. Press `Super+Ctrl+Shift+L`.
 3. Type `this is fine` without clicking.
 4. The eight animated results appear. Press Right once to select "This Is Fine Dog Meme in Burning House".
 5. Press Enter. The selected tile shows a brief copy state; Loopbox closes when the clipboard owns the verified GIF.
@@ -388,7 +390,7 @@ Before submission:
 1. Use `io.github.ajanraj.loopbox` everywhere. The complete ID, `Loopbox`, and `omarchy-loopbox` had no registry, submission, or public-repository collision at research time; repeat the marketplace checks immediately before submission.
 2. Run `omarchy plugin validate .`.
 3. Run focused JS and shell tests, `qmllint` with Omarchy's `qs.*` imports available, and the live summon/search/copy flow.
-4. Test a clean install with `omarchy plugin add <public-repository-url> --enable`, the manual shortcut, and `omarchy plugin remove <id>`.
+4. Test a clean install with `omarchy plugin add <public-repository-url> --enable`, the first-launch shortcut picker, shortcut removal, and `omarchy plugin remove <id>`.
 5. Confirm the repository and preview are public, all dependencies and API-key steps are documented, and no credential appears in Git history.
 6. Use the official submission form, preserve all six headings and five checklist statements, show the final issue body to the owner, and obtain explicit approval before opening the issue. [Submission form](https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/new?template=submit-plugin.yml), [`SUBMISSION.md`](https://github.com/HANCORE-linux/omarchy-plugin-marketplace/blob/d4ce66d2384a0bf88f6db7097f2adeb62db72c41/SUBMISSION.md).
 
@@ -433,7 +435,7 @@ Those are milestone-zero gates, not post-polish QA.
 
 ## Exact MVP to build
 
-Build one unload-on-close Omarchy overlay summoned by `Super+Ctrl+G`. It uses the Raycast KLIPY proxy for no-config search and trending, renders eight `nanogif` previews in a four by two keyboard grid, copies a verified original as raw `image/gif` on Enter, copies its direct URL on Shift+Enter, stores 20 recents and 50 favourites in one atomic state file, exposes trending and favourites views, shows KLIPY attribution, and includes complete loading, empty, provider, preview, and clipboard failure states. No pagination, provider switching, downloads, settings, auto-paste, stickers, clips, or GIPHY before submission.
+Build one unload-on-close Omarchy overlay opened by a bar icon or a collision-checked `Super+Ctrl+Shift+letter` shortcut. It uses the Raycast KLIPY proxy for no-config search and trending, renders eight `nanogif` previews in a four by two keyboard grid, copies a verified original as raw `image/gif` on Enter, copies its direct URL on Shift+Enter, stores 20 recents and 50 favourites in one atomic state file, exposes trending and favourites views, shows KLIPY attribution, and includes complete loading, empty, provider, preview, clipboard, and shortcut failure states. No pagination, provider switching, downloads, settings, auto-paste, stickers, clips, or GIPHY before submission.
 
 ## Biggest technical risk
 

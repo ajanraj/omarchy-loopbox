@@ -33,12 +33,33 @@ Item {
   property string stateStorageError: ""
   property string persistedStateText: ""
   property string pendingStateText: ""
+  property bool shortcutSetup: false
+  property int shortcutSerial: 0
+  property int shortcutCandidateIndex: 0
+  property bool shortcutAvailable: false
+  property bool shortcutChecking: false
+  property bool shortcutInstalling: false
+  property string shortcutConflict: ""
+  property string shortcutDefaultConflict: ""
+  property string shortcutError: ""
+  property string customShortcut: ""
+  property bool shortcutInstallPending: false
+  property bool forceShortcutSetup: false
+  property var shortcutCandidates: [
+    "SUPER + CTRL + SHIFT + L",
+    "SUPER + CTRL + SHIFT + J",
+    "SUPER + CTRL + SHIFT + U",
+    "SUPER + CTRL + SHIFT + M",
+    "SUPER + CTRL + SHIFT + C"
+  ]
 
   readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")
   readonly property string stateDirectory: stateHome + "/loopbox"
   readonly property string statePath: stateDirectory + "/state.json"
   readonly property string pluginDirectory: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
   readonly property string copyScript: pluginDirectory + "/scripts/copy-gif"
+  readonly property string shortcutScript: pluginDirectory + "/scripts/shortcut"
+  readonly property string selectedShortcut: customShortcut || shortcutCandidates[shortcutCandidateIndex] || shortcutCandidates[0]
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -59,12 +80,105 @@ Item {
     root.query = ""
     root.viewMode = "trending"
     root.selectedIndex = 0
-    root.statusMessage = root.stateStorageError || "Trending GIFs"
-    root.statusError = Boolean(root.stateStorageError)
+    root.statusMessage = "Checking shortcut"
+    root.statusError = false
     resultModel.clear()
     root.requestSerial += 1
-    root.startSearch(root.requestSerial, "")
+    root.forceShortcutSetup = false
+    try {
+      var payload = payloadJson ? JSON.parse(String(payloadJson)) : {}
+      root.forceShortcutSetup = payload && payload.setupShortcut === true
+    } catch (error) {}
+    root.beginShortcutSetup()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  function beginShortcutSetup() {
+    root.shortcutSetup = true
+    root.shortcutSerial += 1
+    root.shortcutCandidateIndex = 0
+    root.shortcutAvailable = false
+    root.shortcutChecking = false
+    root.shortcutInstalling = false
+    root.shortcutConflict = ""
+    root.shortcutDefaultConflict = ""
+    root.shortcutError = ""
+    root.customShortcut = ""
+    root.shortcutInstallPending = false
+    if (!root.pluginDirectory) {
+      root.shortcutError = "Loopbox could not locate its shortcut helper. Press Tab to continue without a shortcut."
+      return
+    }
+    root.checkShortcutCandidate(true)
+  }
+
+  function checkShortcutCandidate(findAlternative) {
+    if (!root.opened || !root.shortcutSetup || shortcutProc.running) return
+    root.shortcutAvailable = false
+    root.shortcutChecking = true
+    root.shortcutConflict = ""
+    root.shortcutError = ""
+    shortcutProc.serial = root.shortcutSerial
+    shortcutProc.findAlternative = Boolean(findAlternative)
+    shortcutProc.action = "status"
+    shortcutProc.command = root.forceShortcutSetup
+      ? [root.shortcutScript, "status", root.selectedShortcut, "--force"]
+      : [root.shortcutScript, "status", root.selectedShortcut]
+    shortcutProc.running = true
+  }
+
+  function chooseShortcut(offset) {
+    if (root.shortcutChecking || root.shortcutInstalling || shortcutProc.running) return
+    var count = root.shortcutCandidates.length
+    root.customShortcut = ""
+    root.shortcutCandidateIndex = (root.shortcutCandidateIndex + offset + count) % count
+    root.checkShortcutCandidate(false)
+  }
+
+  function chooseShortcutLetter(letter) {
+    if (root.shortcutChecking || root.shortcutInstalling || shortcutProc.running) return
+    var key = String(letter || "").toUpperCase()
+    if (!/^[A-Z]$/.test(key)) return
+    root.customShortcut = "SUPER + CTRL + SHIFT + " + key
+    root.checkShortcutCandidate(false)
+  }
+
+  function installSelectedShortcut() {
+    if (root.shortcutChecking) {
+      if (!root.shortcutDefaultConflict) root.shortcutInstallPending = true
+      return
+    }
+    if (!root.shortcutAvailable || root.shortcutInstalling || shortcutProc.running) return
+    root.shortcutInstallPending = false
+    root.shortcutInstalling = true
+    root.shortcutError = ""
+    shortcutProc.serial = root.shortcutSerial
+    shortcutProc.findAlternative = false
+    shortcutProc.action = "install"
+    shortcutProc.command = [root.shortcutScript, "install", root.selectedShortcut]
+    shortcutProc.running = true
+  }
+
+  function skipShortcutSetup() {
+    if (root.shortcutInstalling || shortcutProc.running) return
+    root.shortcutChecking = true
+    shortcutProc.serial = root.shortcutSerial
+    shortcutProc.findAlternative = false
+    shortcutProc.action = "skip"
+    shortcutProc.command = [root.shortcutScript, "skip"]
+    shortcutProc.running = true
+  }
+
+  function openPicker(message, error) {
+    root.shortcutSerial += 1
+    if (shortcutProc.running) shortcutProc.running = false
+    root.shortcutSetup = false
+    root.shortcutChecking = false
+    root.shortcutInstalling = false
+    root.statusMessage = message || root.stateStorageError || "Trending GIFs"
+    root.statusError = Boolean(error) || Boolean(root.stateStorageError)
+    root.requestSerial += 1
+    root.startSearch(root.requestSerial, "")
   }
 
   // Called by the shell host before this unload-on-close plugin is destroyed.
@@ -72,18 +186,24 @@ Item {
     dismissTimer.stop()
     searchDebounce.stop()
     root.requestSerial += 1
+    root.shortcutSerial += 1
     searchProc.queuedSerial = 0
     searchProc.expectedStop = true
     if (searchProc.running) searchProc.running = false
     if (copyProc.running) copyProc.running = false
     if (linkProc.running) linkProc.running = false
+    if (shortcutProc.running) shortcutProc.running = false
     root.loading = false
     root.copying = false
     root.copyingIndex = -1
+    root.shortcutSetup = false
+    root.shortcutChecking = false
+    root.shortcutInstalling = false
     root.opened = false
   }
 
   function dismiss() {
+    if (root.shortcutInstalling) return
     if (root.shell && typeof root.shell.hide === "function")
       root.shell.hide((root.manifest && root.manifest.id) || "io.github.ajanraj.loopbox")
     else
@@ -495,6 +615,77 @@ Item {
     }
   }
 
+  Process {
+    id: shortcutProc
+    property int serial: 0
+    property bool findAlternative: false
+    property string action: ""
+
+    stdout: StdioCollector { id: shortcutStdout; waitForEnd: true }
+    stderr: StdioCollector { id: shortcutStderr; waitForEnd: true }
+
+    onExited: function(exitCode, exitStatus) {
+      if (serial !== root.shortcutSerial || !root.opened || !root.shortcutSetup) return
+
+      root.shortcutChecking = false
+      var finishedAction = action
+      root.shortcutInstalling = false
+      if (exitCode !== 0 || exitStatus !== 0) {
+        var detail = String(shortcutStderr.text || "").trim()
+        if (finishedAction === "status" || finishedAction === "skip") {
+          root.openPicker(detail || "Shortcut setup is unavailable. Open Loopbox from the bar.", true)
+          return
+        }
+        root.shortcutAvailable = false
+        root.shortcutError = detail || "Could not inspect Hyprland shortcuts. Press Tab to continue without one."
+        return
+      }
+
+      var response
+      try {
+        response = JSON.parse(String(shortcutStdout.text || ""))
+      } catch (error) {
+        if (finishedAction === "status" || finishedAction === "skip") {
+          root.openPicker("Shortcut setup returned an invalid response. Open Loopbox from the bar.", true)
+          return
+        }
+        root.shortcutAvailable = false
+        root.shortcutError = "The shortcut helper returned an invalid response. Press Tab to continue without one."
+        return
+      }
+
+      if (finishedAction === "skip" || response.skipped) {
+        root.openPicker("")
+        return
+      }
+      if (finishedAction === "install" && response.installed) {
+        root.openPicker("Shortcut ready. Trending GIFs")
+        return
+      }
+      if (response.configured) {
+        root.openPicker("")
+        return
+      }
+
+      root.shortcutAvailable = Boolean(response.available)
+      root.shortcutConflict = String(response.conflict || "")
+      root.shortcutError = ""
+
+      if (!root.shortcutAvailable && findAlternative) {
+        if (root.shortcutCandidateIndex === 0) {
+          root.shortcutDefaultConflict = root.shortcutConflict || "another action"
+          root.shortcutInstallPending = false
+        }
+        if (root.shortcutCandidateIndex + 1 < root.shortcutCandidates.length) {
+          root.shortcutCandidateIndex += 1
+          Qt.callLater(function() { root.checkShortcutCandidate(true) })
+        }
+      } else if (root.shortcutAvailable && root.shortcutInstallPending) {
+        Qt.callLater(function() { root.installSelectedShortcut() })
+      }
+    }
+  }
+
   PanelWindow {
     id: panel
     visible: root.opened
@@ -512,7 +703,7 @@ Item {
 
     MouseArea {
       anchors.fill: parent
-      onClicked: root.dismiss()
+      onClicked: if (!root.shortcutInstalling) root.dismiss()
     }
 
     BorderSurface {
@@ -542,6 +733,30 @@ Item {
         Keys.onPressed: function(event) {
           var control = (event.modifiers & Qt.ControlModifier) !== 0
           var shift = (event.modifiers & Qt.ShiftModifier) !== 0
+
+          if (root.shortcutSetup) {
+            if (root.shortcutInstalling) {
+              event.accepted = true
+              return
+            }
+            if (event.key === Qt.Key_Escape) {
+              root.dismiss()
+            } else if (event.key === Qt.Key_Left) {
+              root.chooseShortcut(-1)
+            } else if (event.key === Qt.Key_Right) {
+              root.chooseShortcut(1)
+            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+              root.installSelectedShortcut()
+            } else if (event.key === Qt.Key_Tab) {
+              root.skipShortcutSetup()
+            } else if (!control && !shift
+                       && !(event.modifiers & (Qt.AltModifier | Qt.MetaModifier))
+                       && event.text && /^[a-zA-Z]$/.test(event.text)) {
+              root.chooseShortcutLetter(event.text)
+            }
+            event.accepted = true
+            return
+          }
 
           if (event.key === Qt.Key_Escape) {
             if (root.query) root.setQuery("")
@@ -600,6 +815,7 @@ Item {
         anchors.bottomMargin: card.contentBottomInset
         anchors.leftMargin: card.contentLeftInset
         spacing: root.contentSpacing
+        visible: !root.shortcutSetup
 
         Item {
           id: header
@@ -754,6 +970,33 @@ Item {
           busy: root.loading || root.copying
           foreground: root.foreground
         }
+      }
+
+      ShortcutSetup {
+        anchors.fill: parent
+        anchors.topMargin: card.contentTopInset
+        anchors.rightMargin: card.contentRightInset
+        anchors.bottomMargin: card.contentBottomInset
+        anchors.leftMargin: card.contentLeftInset
+        visible: root.shortcutSetup
+        foreground: root.foreground
+        accent: Color.accent
+        selectedBackground: root.selectedBackground
+        fontFamily: root.fontFamily
+        defaultShortcut: root.shortcutCandidates[0]
+        shortcut: root.selectedShortcut
+        conflict: root.shortcutConflict
+        defaultConflict: root.shortcutDefaultConflict
+        errorMessage: root.shortcutError
+        available: root.shortcutAvailable
+        checking: root.shortcutChecking
+        installing: root.shortcutInstalling
+        candidateIndex: root.shortcutCandidateIndex
+        candidateCount: root.shortcutCandidates.length
+        onPreviousRequested: root.chooseShortcut(-1)
+        onNextRequested: root.chooseShortcut(1)
+        onInstallRequested: root.installSelectedShortcut()
+        onSkipRequested: root.skipShortcutSetup()
       }
     }
   }

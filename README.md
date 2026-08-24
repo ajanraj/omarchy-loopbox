@@ -8,6 +8,7 @@ Loopbox is a fast keyboard-first Omarchy GIF picker and reaction GIF search plug
 
 - Searches reaction GIFs through KLIPY with no API key or setup
 - Shows trending GIFs as soon as the overlay opens
+- Adds a Loopbox image icon to the Omarchy bar
 - Keeps eight animated results fast and keyboard-navigable
 - Copies verified GIF data to the Wayland clipboard with Enter
 - Copies the direct GIF URL with Shift+Enter when an app does not accept image data
@@ -18,6 +19,7 @@ Loopbox is a fast keyboard-first Omarchy GIF picker and reaction GIF search plug
 Loopbox targets current Omarchy 4 releases with the Quickshell-based Omarchy shell. It uses tools included with Omarchy:
 
 - `curl` for GIF search and downloads
+- `jq` and `hyprctl` for safe shortcut setup
 - `wl-clipboard` through Omarchy's `omarchy-clipboard-paste-file` helper
 - Qt image format support for animated GIF previews
 
@@ -31,18 +33,24 @@ Install and enable Loopbox from its public repository:
 omarchy plugin add https://github.com/ajanraj/omarchy-loopbox.git --enable
 ```
 
-Add an optional shortcut to `~/.config/hypr/bindings.lua`:
+Omarchy adds the Loopbox image icon to the right side of the bar by default. An interactive install also lets you choose the bar section. Left-click the icon to open Loopbox. If you decline a shortcut, right-click the icon to show setup later.
 
-```lua
-o.bind("SUPER + CTRL + G", "Loopbox", "omarchy-shell shell toggle io.github.ajanraj.loopbox '{}'")
-```
+The first open offers `Super+Ctrl+Shift+L`. Current Omarchy defaults do not use this chord. Press Enter to accept it. Loopbox checks the live Hyprland binding table first, so custom shortcuts count too. If another action uses the default, Loopbox names the conflict and selects a free alternative. Type any letter to test `Super+Ctrl+Shift` with that key, or use Left and Right to browse suggestions, then press Enter. Loopbox never unbinds or replaces an existing action.
 
-Check `omarchy menu keybindings --print` first and choose another combination if `Super+Ctrl+G` is already in use. Hyprland reloads the Lua configuration when it changes.
+Omarchy's plugin installer cannot run plugin code or interactive install hooks. Shortcut choice therefore happens inside Loopbox on first launch, after installation. Press Tab to decline a shortcut and keep opening Loopbox from the bar icon. Loopbox remembers that choice; right-click the bar icon if you change your mind.
+
+After confirmation, Loopbox writes its binding to `~/.config/hypr/loopbox.lua`, adds a small managed loader block to `~/.config/hypr/bindings.lua`, reloads Hyprland, and checks for new configuration errors. A failed reload restores both files.
 
 You can also open Loopbox directly:
 
 ```bash
 omarchy-shell shell toggle io.github.ajanraj.loopbox '{}'
+```
+
+If you update an older overlay-only Loopbox checkout, add its new widget to the existing bar layout once:
+
+```bash
+omarchy bar put io.github.ajanraj.loopbox --section right
 ```
 
 ## Use
@@ -61,6 +69,8 @@ Open Loopbox and start typing. An empty query shows trending GIFs.
 | Ctrl+R | Retry the current search |
 | Escape | Clear the query, then close Loopbox |
 
+During shortcut setup, type a letter to choose its `Super+Ctrl+Shift` chord. Left and Right browse suggestions, Enter confirms, Tab declines future prompts, and Escape closes Loopbox.
+
 After Enter succeeds, Loopbox closes and the GIF is ready to paste. Paste support varies by application. If an application flattens or rejects animated image clipboard data, use Shift+Enter and paste the direct URL instead.
 
 ## Provider and privacy
@@ -77,6 +87,8 @@ Loopbox stores only:
 
 - Favourites and recents in `$XDG_STATE_HOME/loopbox/state.json` (default: `~/.local/state/loopbox/state.json`)
 - Copied original GIFs in `$XDG_CACHE_HOME/loopbox/gifs/` (default: `~/.cache/loopbox/gifs/`)
+- The confirmed shortcut in `~/.config/hypr/loopbox.lua`, loaded by a marked block in `~/.config/hypr/bindings.lua`
+- A shortcut-declined marker at `$XDG_STATE_HOME/loopbox/shortcut-setup-skipped`
 
 The original GIF cache is bounded to 20 files and 150 MiB. Search responses and previews are not persisted by Loopbox.
 
@@ -86,7 +98,9 @@ The original GIF cache is bounded to 20 files and 150 MiB. Search responses and 
 
 **A GIF will not paste:** confirm the target accepts `image/gif`, then use Shift+Enter to copy its URL. Loopbox keeps the overlay open when download, validation, or clipboard ownership fails.
 
-**The shortcut does nothing:** confirm the plugin is enabled with `omarchy-shell shell listPlugins`, then run the direct toggle command above. Check Hyprland configuration errors with:
+**The bar icon is missing:** confirm the plugin is enabled with `omarchy-shell shell listPlugins`, then place its widget with `omarchy bar put io.github.ajanraj.loopbox --section right`.
+
+**The shortcut does nothing:** click the bar icon to open Loopbox, then complete shortcut setup. You can also run the direct toggle command above. Check Hyprland configuration errors with:
 
 ```bash
 hyprctl reload
@@ -95,13 +109,19 @@ hyprctl configerrors
 
 ## Remove
 
-Remove the plugin checkout and disable it:
+Remove the managed shortcut first, while the plugin helper is still installed:
+
+```bash
+~/.config/omarchy/plugins/io.github.ajanraj.loopbox/scripts/shortcut remove
+```
+
+Then remove the plugin checkout and disable it:
 
 ```bash
 omarchy plugin remove io.github.ajanraj.loopbox
 ```
 
-Remove the Loopbox line from `~/.config/hypr/bindings.lua` if you added it. Omarchy intentionally leaves application state and cache alone. Delete these directories yourself if you also want to remove favourites, recents, and cached GIFs:
+The shortcut removal command changes only Loopbox's marked loader block and `loopbox.lua`, then reloads and validates Hyprland. Omarchy intentionally leaves application state and cache alone. Delete these directories yourself if you also want to remove favourites, recents, and cached GIFs:
 
 ```bash
 gio trash "${XDG_STATE_HOME:-$HOME/.local/state}/loopbox"
@@ -115,6 +135,7 @@ Run the focused checks from the repository root:
 ```bash
 node tests/model-test.js
 bash tests/clipboard-test.sh
+bash tests/shortcut-test.sh
 omarchy plugin validate .
 ```
 

@@ -2,14 +2,23 @@
   "schemaVersion": 1,
   "id": "io.github.ajanraj.loopbox",
   "name": "Loopbox",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Ajan",
   "license": "MIT",
   "description": "Fast keyboard-first GIF picker and GIF search for Omarchy. Search reaction GIFs, trending GIFs, favourites, and copy GIFs or links directly to your Wayland clipboard.",
   "kinds": [
-    "overlay"
+    "overlay",
+    "bar-widget"
   ],
   "entryPoints": {
-    "overlay": "Loopbox.qml"
+    "overlay": "Loopbox.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Loopbox",
+    "description": "Open the Loopbox GIF picker",
+    "category": "Launcher",
+    "allowMultiple": false,
+    "defaultSection": "right"
   }
 }

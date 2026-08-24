@@ -1,0 +1,322 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+plugin_id="io.github.ajanraj.loopbox"
+default_shortcut="SUPER + CTRL + SHIFT + L"
+hyprctl_bin=${LOOPBOX_HYPRCTL:-hyprctl}
+config_home=${XDG_CONFIG_HOME:-${HOME:?HOME is not set}/.config}
+bindings_file=${LOOPBOX_BINDINGS_FILE:-$config_home/hypr/bindings.lua}
+shortcut_file=${LOOPBOX_SHORTCUT_FILE:-$config_home/hypr/loopbox.lua}
+state_home=${XDG_STATE_HOME:-${HOME:?HOME is not set}/.local/state}
+skip_file=${LOOPBOX_SKIP_FILE:-$state_home/loopbox/shortcut-setup-skipped}
+begin_marker="-- BEGIN LOOPBOX SHORTCUT SETUP v1 (managed; do not edit)"
+end_marker="-- END LOOPBOX SHORTCUT SETUP"
+require_line='require("hypr.loopbox")'
+managed_header="-- Managed by Loopbox ($plugin_id)."
+
+transaction_active=false
+transaction_bindings_backup=""
+transaction_shortcut_backup=""
+transaction_shortcut_existed=false
+transaction_temp_files=()
+
+fail() {
+    printf 'Loopbox shortcut setup: %s\n' "$*" >&2
+    exit 1
+}
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || fail "'$1' is required. Install it and try again."
+}
+
+parse_shortcut() {
+    local shortcut=${1:-}
+    if [[ $shortcut =~ ^SUPER[[:space:]]\+[[:space:]]CTRL[[:space:]]\+[[:space:]]SHIFT[[:space:]]\+[[:space:]]([A-Z])$ ]]; then
+        shortcut_key=${BASH_REMATCH[1]}
+        shortcut_mask=69
+        return
+    fi
+    fail "unsupported shortcut '$shortcut'. Choose Super+Ctrl+Shift and one letter."
+}
+
+read_bindings() {
+    local output
+    if ! output=$("$hyprctl_bin" binds -j 2>&1); then
+        fail "could not read Hyprland shortcuts. $output"
+    fi
+    jq -e 'type == "array"' >/dev/null 2>&1 <<<"$output" ||
+        fail "Hyprland returned an invalid shortcut list."
+    printf '%s\n' "$output"
+}
+
+configured_binding() {
+    if [[ ! -f $shortcut_file ]] || [[ $(head -n 1 -- "$shortcut_file") != "$managed_header" ]] ||
+       ! grep -Fx -- "$begin_marker" "$bindings_file" >/dev/null 2>&1 ||
+       ! grep -Fx -- "$require_line" "$bindings_file" >/dev/null 2>&1 ||
+       ! grep -Fx -- "$end_marker" "$bindings_file" >/dev/null 2>&1; then
+        jq -cn 'null'
+        return
+    fi
+    jq -c '[.[] | select((.submap // "") == "" and (.description // "") == "Loopbox")][0] // null'
+}
+
+conflicting_binding() {
+    local mask=$1
+    local key=$2
+    jq -c --argjson mask "$mask" --arg key "$key" '
+      [.[] | select(
+        (.submap // "") == ""
+        and .modmask == $mask
+        and ((.key // "") | ascii_upcase) == $key
+      )][0] // null
+    '
+}
+
+print_status() {
+    local shortcut=$1
+    local force=${2:-false}
+    local binds_json configured conflict conflict_name
+    parse_shortcut "$shortcut"
+    if [[ $force != true && -f $skip_file ]]; then
+        jq -cn --arg shortcut "$shortcut" '{configured: false, skipped: true, shortcut: $shortcut, available: false, conflict: ""}'
+        return
+    fi
+    binds_json=$(read_bindings)
+    configured=$(configured_binding <<<"$binds_json")
+    conflict=$(conflicting_binding "$shortcut_mask" "$shortcut_key" <<<"$binds_json")
+    conflict_name=$(jq -r '
+      if . == null then ""
+      elif ((.description // "") | length) > 0 then .description
+      elif ((.arg // "") | length) > 0 then .arg
+      else "Existing shortcut"
+      end
+    ' <<<"$conflict")
+
+    jq -cn \
+        --arg shortcut "$shortcut" \
+        --arg conflict "$conflict_name" \
+        --argjson configured "$( [[ $configured == null ]] && printf false || printf true )" \
+        --argjson available "$( [[ $conflict == null ]] && printf true || printf false )" \
+        '{configured: $configured, skipped: false, shortcut: $shortcut, available: $available, conflict: $conflict}'
+}
+
+restore_config() {
+    local bindings_backup=$1
+    local shortcut_backup=$2
+    local shortcut_existed=$3
+
+    cp -p -- "$bindings_backup" "$bindings_file"
+    if [[ $shortcut_existed == true ]]; then
+        cp -p -- "$shortcut_backup" "$shortcut_file"
+    else
+        rm -f -- "$shortcut_file"
+    fi
+    "$hyprctl_bin" reload >/dev/null 2>&1 || true
+}
+
+cleanup_transaction() {
+    if (( ${#transaction_temp_files[@]} > 0 )); then
+        rm -f -- "${transaction_temp_files[@]}"
+    fi
+    transaction_temp_files=()
+}
+
+rollback_transaction_on_exit() {
+    local exit_code=$?
+    trap - EXIT INT TERM HUP
+    if [[ $transaction_active == true ]]; then
+        restore_config "$transaction_bindings_backup" "$transaction_shortcut_backup" "$transaction_shortcut_existed"
+    fi
+    cleanup_transaction
+    exit "$exit_code"
+}
+
+begin_transaction() {
+    transaction_bindings_backup=$1
+    transaction_shortcut_backup=$2
+    transaction_shortcut_existed=$3
+    shift 3
+    transaction_temp_files=("$transaction_bindings_backup" "$transaction_shortcut_backup" "$@")
+    transaction_active=false
+    trap rollback_transaction_on_exit EXIT
+    trap 'exit 130' INT TERM HUP
+}
+
+finish_transaction() {
+    transaction_active=false
+    cleanup_transaction
+    trap - EXIT INT TERM HUP
+}
+
+install_shortcut() {
+    local shortcut=$1
+    local binds_json configured conflict before_errors after_errors
+    local config_dir bindings_backup shortcut_backup shortcut_tmp bindings_tmp
+    local begin_count end_count
+    local shortcut_existed=false
+
+    parse_shortcut "$shortcut"
+    [[ -f $bindings_file ]] ||
+        fail "could not find $bindings_file. Create the Omarchy Hyprland config and try again."
+
+    binds_json=$(read_bindings)
+    configured=$(configured_binding <<<"$binds_json")
+    if [[ $configured != null ]]; then
+        jq -cn --arg shortcut "$shortcut" '{installed: true, alreadyConfigured: true, shortcut: $shortcut}'
+        return
+    fi
+
+    conflict=$(conflicting_binding "$shortcut_mask" "$shortcut_key" <<<"$binds_json")
+    if [[ $conflict != null ]]; then
+        fail "$(jq -r '
+          (if ((.description // "") | length) > 0 then .description
+           elif ((.arg // "") | length) > 0 then .arg
+           else "another action"
+           end) + " already uses that shortcut. Choose another one."
+        ' <<<"$conflict")"
+    fi
+
+    config_dir=$(dirname -- "$bindings_file")
+    [[ $(dirname -- "$shortcut_file") == "$config_dir" ]] ||
+        fail "the managed shortcut file must be in the same Hyprland config directory as bindings.lua."
+    begin_count=$(grep -Fxc -- "$begin_marker" "$bindings_file" || true)
+    end_count=$(grep -Fxc -- "$end_marker" "$bindings_file" || true)
+    if (( begin_count != end_count || begin_count > 1 )); then
+        fail "the managed Loopbox block in $bindings_file is incomplete or duplicated. Repair it manually before setup."
+    fi
+    if grep -Fx -- "$require_line" "$bindings_file" >/dev/null &&
+       ! grep -Fx -- "$begin_marker" "$bindings_file" >/dev/null; then
+        fail "$bindings_file already loads hypr.loopbox outside Loopbox's managed block. Remove that line or manage the shortcut manually."
+    fi
+    if [[ -f $shortcut_file ]] && [[ $(head -n 1 -- "$shortcut_file") != "$managed_header" ]]; then
+        fail "$shortcut_file already exists and is not managed by Loopbox. Move or rename it before setup."
+    fi
+
+    bindings_backup=$(mktemp "$config_dir/.loopbox-bindings-backup.XXXXXX")
+    shortcut_backup=$(mktemp "$config_dir/.loopbox-shortcut-backup.XXXXXX")
+    shortcut_tmp=$(mktemp "$config_dir/.loopbox-shortcut.XXXXXX")
+    bindings_tmp=$(mktemp "$config_dir/.loopbox-bindings.XXXXXX")
+    cp -p -- "$bindings_file" "$bindings_backup"
+    if [[ -f $shortcut_file ]]; then
+        shortcut_existed=true
+        cp -p -- "$shortcut_file" "$shortcut_backup"
+    fi
+    begin_transaction "$bindings_backup" "$shortcut_backup" "$shortcut_existed" "$shortcut_tmp" "$bindings_tmp"
+
+    before_errors=$("$hyprctl_bin" configerrors 2>/dev/null || true)
+
+    printf '%s\n' \
+        "$managed_header" \
+        "o.bind(\"$shortcut\", \"Loopbox\", \"omarchy-shell shell toggle $plugin_id '{}'\")" \
+        >"$shortcut_tmp"
+    chmod --reference="$bindings_file" "$shortcut_tmp"
+    transaction_active=true
+    mv -f -- "$shortcut_tmp" "$shortcut_file"
+
+    if ! grep -Fx -- "$require_line" "$bindings_file" >/dev/null; then
+        cp -p -- "$bindings_file" "$bindings_tmp"
+        printf '\n%s\n%s\n%s\n' "$begin_marker" "$require_line" "$end_marker" >>"$bindings_tmp"
+        mv -f -- "$bindings_tmp" "$bindings_file"
+    fi
+
+    if ! "$hyprctl_bin" reload >/dev/null 2>&1; then
+        fail "Hyprland rejected the reload. The previous configuration was restored."
+    fi
+    after_errors=$("$hyprctl_bin" configerrors 2>/dev/null || true)
+    if [[ -n $after_errors && $after_errors != "$before_errors" ]]; then
+        fail "Hyprland reported a new configuration error. The previous configuration was restored."
+    fi
+
+    finish_transaction
+    jq -cn --arg shortcut "$shortcut" '{installed: true, alreadyConfigured: false, shortcut: $shortcut}'
+}
+
+remove_shortcut() {
+    local config_dir bindings_backup shortcut_backup bindings_tmp
+    local shortcut_existed=false before_errors after_errors
+
+    [[ -f $bindings_file ]] || fail "could not find $bindings_file."
+    config_dir=$(dirname -- "$bindings_file")
+    [[ $(dirname -- "$shortcut_file") == "$config_dir" ]] ||
+        fail "the managed shortcut file must be in the same Hyprland config directory as bindings.lua."
+    if [[ -f $shortcut_file ]] && [[ $(head -n 1 -- "$shortcut_file") != "$managed_header" ]]; then
+        fail "$shortcut_file is not managed by Loopbox and will not be removed."
+    fi
+
+    if ! grep -Fx -- "$begin_marker" "$bindings_file" >/dev/null && [[ ! -f $shortcut_file ]]; then
+        jq -cn '{removed: false}'
+        return
+    fi
+
+    bindings_backup=$(mktemp "$config_dir/.loopbox-bindings-backup.XXXXXX")
+    shortcut_backup=$(mktemp "$config_dir/.loopbox-shortcut-backup.XXXXXX")
+    bindings_tmp=$(mktemp "$config_dir/.loopbox-bindings.XXXXXX")
+    cp -p -- "$bindings_file" "$bindings_backup"
+    if [[ -f $shortcut_file ]]; then
+        shortcut_existed=true
+        cp -p -- "$shortcut_file" "$shortcut_backup"
+    fi
+    begin_transaction "$bindings_backup" "$shortcut_backup" "$shortcut_existed" "$bindings_tmp"
+    before_errors=$("$hyprctl_bin" configerrors 2>/dev/null || true)
+
+    transaction_active=true
+    if grep -Fx -- "$begin_marker" "$bindings_file" >/dev/null; then
+        if ! awk -v begin="$begin_marker" -v end="$end_marker" '
+          $0 == begin { skipping = 1; next }
+          $0 == end && skipping { skipping = 0; next }
+          !skipping { print }
+          END { if (skipping) exit 42 }
+        ' "$bindings_file" >"$bindings_tmp"; then
+            fail "the managed block in $bindings_file is incomplete. Remove it manually."
+        fi
+        chmod --reference="$bindings_file" "$bindings_tmp"
+        mv -f -- "$bindings_tmp" "$bindings_file"
+    fi
+    rm -f -- "$shortcut_file"
+
+    if ! "$hyprctl_bin" reload >/dev/null 2>&1; then
+        fail "Hyprland rejected the reload. The shortcut was restored."
+    fi
+    after_errors=$("$hyprctl_bin" configerrors 2>/dev/null || true)
+    if [[ -n $after_errors && $after_errors != "$before_errors" ]]; then
+        fail "Hyprland reported a new configuration error. The shortcut was restored."
+    fi
+
+    finish_transaction
+    jq -cn '{removed: true}'
+}
+
+skip_shortcut_setup() {
+    local skip_dir
+    skip_dir=$(dirname -- "$skip_file")
+    mkdir -p -m 700 -- "$skip_dir"
+    umask 077
+    : >"$skip_file"
+    jq -cn '{skipped: true}'
+}
+
+require_command jq
+require_command "$hyprctl_bin"
+
+case ${1:-status} in
+    status)
+        [[ ${3:-} == "" || ${3:-} == "--force" ]] || fail "usage: shortcut status [shortcut] [--force]"
+        print_status "${2:-$default_shortcut}" "$( [[ ${3:-} == "--force" ]] && printf true || printf false )"
+        ;;
+    install)
+        [[ $# -eq 2 ]] || fail "usage: shortcut install 'SUPER + CTRL + SHIFT + L'"
+        install_shortcut "$2"
+        ;;
+    remove)
+        [[ $# -eq 1 ]] || fail "usage: shortcut remove"
+        remove_shortcut
+        ;;
+    skip)
+        [[ $# -eq 1 ]] || fail "usage: shortcut skip"
+        skip_shortcut_setup
+        ;;
+    *)
+        fail "usage: shortcut [status [shortcut] [--force] | install shortcut | skip | remove]"
+        ;;
+esac
