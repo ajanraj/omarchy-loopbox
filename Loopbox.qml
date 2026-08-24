@@ -426,7 +426,7 @@ Item {
     root.copying = true
     root.copyingIndex = index
     root.statusError = false
-    root.statusMessage = "Downloading and copying GIF"
+    root.statusMessage = "Preparing GIF for the clipboard"
     copyProc.running = true
   }
 

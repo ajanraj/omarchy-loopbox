@@ -10,7 +10,7 @@ Loopbox is a fast keyboard-first Omarchy GIF picker and reaction GIF search plug
 - Shows trending GIFs as soon as the overlay opens
 - Adds a Loopbox image icon to the Omarchy bar
 - Keeps eight animated results fast and keyboard-navigable
-- Copies verified GIF data to the Wayland clipboard with Enter
+- Copies GIFs as animated PNG clipboard data with Enter for reliable Wayland paste support
 - Copies the direct GIF URL with Shift+Enter when an app does not accept image data
 - Saves up to 50 favourites and 20 recent selections locally
 
@@ -19,6 +19,7 @@ Loopbox is a fast keyboard-first Omarchy GIF picker and reaction GIF search plug
 Loopbox targets current Omarchy 4 releases with the Quickshell-based Omarchy shell. It uses tools included with Omarchy:
 
 - `curl` for GIF search and downloads
+- `ffmpeg` for cached GIF-to-APNG conversion before clipboard copy
 - `jq` and `hyprctl` for safe shortcut setup
 - `wl-clipboard` through Omarchy's `omarchy-clipboard-paste-file` helper
 - Qt image format support for animated GIF previews
@@ -61,7 +62,7 @@ Open Loopbox and start typing. An empty query shows trending GIFs.
 |---|---|
 | Arrow keys | Move through the grid |
 | Home / End | Select the first / last result |
-| Enter | Copy the selected GIF as `image/gif` |
+| Enter | Copy the selected GIF as animated `image/png` |
 | Shift+Enter | Copy the selected GIF URL |
 | Ctrl+1 | Show trending GIFs |
 | Ctrl+2 | Show favourites |
@@ -71,7 +72,7 @@ Open Loopbox and start typing. An empty query shows trending GIFs.
 
 During shortcut setup, type a letter to choose its `Super+Ctrl+Shift` chord. Left and Right browse suggestions, Enter confirms, Tab declines future prompts, and Escape closes Loopbox.
 
-After Enter succeeds, Loopbox closes and the GIF is ready to paste. Paste support varies by application. If an application flattens or rejects animated image clipboard data, use Shift+Enter and paste the direct URL instead.
+After Enter succeeds, Loopbox closes and the animation is ready to paste with `Super+V` or the target application's normal paste shortcut. Loopbox converts the original GIF to APNG because Chromium and Omarchy's clipboard history accept `image/png` reliably while preserving animation. If an application rejects animated image clipboard data, use Shift+Enter and paste the direct URL instead.
 
 ## Provider and privacy
 
@@ -86,17 +87,17 @@ GIF results and content are provided by [KLIPY](https://klipy.com/). Their terms
 Loopbox stores only:
 
 - Favourites and recents in `$XDG_STATE_HOME/loopbox/state.json` (default: `~/.local/state/loopbox/state.json`)
-- Copied original GIFs in `$XDG_CACHE_HOME/loopbox/gifs/` (default: `~/.cache/loopbox/gifs/`)
+- Copied original GIFs and their clipboard-ready APNG files in `$XDG_CACHE_HOME/loopbox/gifs/` (default: `~/.cache/loopbox/gifs/`)
 - The confirmed shortcut in `~/.config/hypr/loopbox.lua`, loaded by a marked block in `~/.config/hypr/bindings.lua`
 - A shortcut-declined marker at `$XDG_STATE_HOME/loopbox/shortcut-setup-skipped`
 
-The original GIF cache is bounded to 20 files and 150 MiB. Search responses and previews are not persisted by Loopbox.
+The cache is bounded to 20 GIF/APNG pairs and 150 MiB. Search responses and previews are not persisted by Loopbox.
 
 ## Troubleshooting
 
 **Search does not load:** check network access and retry with Ctrl+R. A rate-limit or provider outage is shown without closing the overlay.
 
-**A GIF will not paste:** confirm the target accepts `image/gif`, then use Shift+Enter to copy its URL. Loopbox keeps the overlay open when download, validation, or clipboard ownership fails.
+**A GIF will not paste:** confirm `ffmpeg` and `wl-copy` are installed, then retry. Use Shift+Enter to copy the direct URL if the target rejects animated PNG clipboard data. Loopbox keeps the overlay open when download, conversion, validation, or clipboard ownership fails.
 
 **The bar icon is missing:** confirm the plugin is enabled with `omarchy-shell shell listPlugins`, then place its widget with `omarchy bar put io.github.ajanraj.loopbox --section right`.
 

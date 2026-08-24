@@ -40,6 +40,7 @@ cache_root=${XDG_CACHE_HOME:-${HOME:+$HOME/.cache}}
 
 cache_dir="$cache_root/loopbox/gifs"
 target="$cache_dir/$provider-$gif_id.gif"
+clipboard_target="$cache_dir/$provider-$gif_id.png"
 
 if ! mkdir -p -- "$cache_dir"; then
     die 'cannot create the GIF cache directory; check its parent permissions'
@@ -130,6 +131,33 @@ validate_gif() {
     return 0
 }
 
+validate_apng() {
+    local file=$1
+    local label=$2
+    local signature
+
+    if [[ ! -f "$file" || -L "$file" ]]; then
+        validation_error="$label file is not a regular file"
+        return 1
+    fi
+
+    if ! signature=$(head -c 8 -- "$file" 2>/dev/null | od -An -tx1 | tr -d '[:space:]'); then
+        validation_error="cannot inspect the $label animated PNG"
+        return 1
+    fi
+    if [[ "$signature" != '89504e470d0a1a0a' ]]; then
+        validation_error="$label file is not a PNG"
+        return 1
+    fi
+    if ! LC_ALL=C grep -a -m1 -q 'acTL' -- "$file"; then
+        validation_error="$label PNG is not animated"
+        return 1
+    fi
+
+    validation_error=''
+    return 0
+}
+
 if [[ -e "$target" || -L "$target" ]]; then
     # A corrupt cache entry should heal on retry instead of poisoning this ID.
     if ! validate_gif "$target" cached; then
@@ -175,13 +203,44 @@ if [[ ! -e "$target" ]]; then
     tmp_file=''
 fi
 
-# Treat the GIF just copied as the newest cache entry before pruning.
-touch -m -- "$target" || die 'cannot update the cached GIF timestamp; check cache permissions'
+if [[ -e "$clipboard_target" || -L "$clipboard_target" ]]; then
+    if ! validate_apng "$clipboard_target" cached; then
+        if ! rm -f -- "$clipboard_target"; then
+            die "$validation_error and could not be removed; check cache permissions"
+        fi
+    fi
+fi
+
+if [[ ! -e "$clipboard_target" ]]; then
+    command -v ffmpeg >/dev/null 2>&1 || die 'ffmpeg is required to prepare animated GIFs for compatible clipboard paste'
+
+    if ! tmp_file=$(mktemp "$cache_dir/.copy-gif.XXXXXX.png"); then
+        die 'cannot create a temporary animated PNG in the cache directory; check its permissions'
+    fi
+    # Level 1 with no PNG filtering keeps first-copy latency near one second
+    # without the roughly 10x size increase produced by level 0.
+    if ! timeout 20s ffmpeg -hide_banner -loglevel error -nostdin -y -i "$target" \
+        -plays 0 -compression_level 1 -pred none -f apng "$tmp_file"; then
+        die 'GIF conversion failed or timed out; retry or choose a smaller GIF'
+    fi
+    if ! validate_apng "$tmp_file" converted; then
+        die "$validation_error; retry or choose another GIF"
+    fi
+    if ! mv -f -- "$tmp_file" "$clipboard_target"; then
+        die 'cannot atomically cache the animated PNG; check cache permissions and retry'
+    fi
+    tmp_file=''
+fi
+
+# Treat the result just copied as the newest cache entry before pruning.
+touch -m -- "$target" "$clipboard_target" || die 'cannot update the cached GIF timestamp; check cache permissions'
 
 prune_cache() {
     local -a entries=()
     local entry
     local file
+    local companion
+    local companion_size
     local size
     local total=0
     local count=0
@@ -196,6 +255,15 @@ prune_cache() {
         fi
         size=${size//[[:space:]]/}
         [[ "$size" =~ ^[0-9]+$ ]] || die 'cached GIF size is unreadable; retry the copy'
+        companion=${file%.gif}.png
+        if [[ -f "$companion" && ! -L "$companion" ]]; then
+            if ! companion_size=$(wc -c <"$companion"); then
+                die 'cannot inspect a cached animated PNG while pruning; retry the copy'
+            fi
+            companion_size=${companion_size//[[:space:]]/}
+            [[ "$companion_size" =~ ^[0-9]+$ ]] || die 'cached animated PNG size is unreadable; retry the copy'
+            size=$((size + companion_size))
+        fi
         count=$((count + 1))
         total=$((total + size))
     done
@@ -215,8 +283,22 @@ prune_cache() {
         fi
         size=${size//[[:space:]]/}
         [[ "$size" =~ ^[0-9]+$ ]] || die 'cached GIF size is unreadable; retry the copy'
+        companion=${file%.gif}.png
+        if [[ -f "$companion" && ! -L "$companion" ]]; then
+            if ! companion_size=$(wc -c <"$companion"); then
+                die 'cannot inspect a cached animated PNG while pruning; retry the copy'
+            fi
+            companion_size=${companion_size//[[:space:]]/}
+            [[ "$companion_size" =~ ^[0-9]+$ ]] || die 'cached animated PNG size is unreadable; retry the copy'
+            size=$((size + companion_size))
+        fi
         if ! rm -f -- "$file"; then
             die 'cannot prune an old cached GIF; check cache permissions and retry'
+        fi
+        if [[ -e "$companion" || -L "$companion" ]]; then
+            if ! rm -f -- "$companion"; then
+                die 'cannot prune an old cached animated PNG; check cache permissions and retry'
+            fi
         fi
         count=$((count - 1))
         total=$((total - size))
@@ -238,7 +320,7 @@ if [[ ! -x "$clipboard_helper" ]]; then
     die 'clipboard helper is unavailable; install Omarchy or set LOOPBOX_CLIPBOARD_HELPER to an executable helper'
 fi
 
-if ! "$clipboard_helper" --copy-only image/gif "$target" >/dev/null; then
+if ! "$clipboard_helper" --copy-only image/png "$clipboard_target" >/dev/null; then
     die 'clipboard copy failed; verify the Wayland session and clipboard helper'
 fi
 
