@@ -106,7 +106,7 @@ assert.deepStrictEqual(
 
 // The live provider shape maps nanogif -> preview and gif -> original.
 const parsed = Klipy.parseResponse(JSON.stringify(fixture));
-assert.strictEqual(parsed.length, 3);
+assert.strictEqual(parsed.length, 4);
 assert.deepStrictEqual(plain(parsed[0]), {
   provider: "klipy",
   id: "6039247074942322",
@@ -128,6 +128,9 @@ assert.deepStrictEqual(
 assert.strictEqual(parsed[2].id, "771");
 assert.strictEqual(parsed[2].previewUrl, parsed[2].originalUrl);
 assert.strictEqual(parsed[2].pageUrl, "");
+const hostileTitle = '<img src="https://attacker.invalid/title.png">Provider title stays text';
+assert.strictEqual(parsed[3].title, hostileTitle);
+assert.strictEqual(Model.normalizeRecord(parsed[3]).title, hostileTitle);
 
 assert.throws(() => Klipy.parseResponse("not JSON"), /Klipy response is not valid JSON/);
 assert.throws(() => Klipy.parseResponse(JSON.stringify({ error: "rate limited" })), /Klipy provider error: rate limited/);

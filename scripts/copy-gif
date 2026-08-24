@@ -78,9 +78,10 @@ release_lock() {
 # flock is part of the normal Linux userspace. The mkdir fallback keeps two
 # helper processes from pruning one another's current files on minimal hosts.
 if command -v flock >/dev/null 2>&1; then
-    lock_path="$cache_dir/.copy-gif.lock"
-    if ! exec {lock_fd}>"$lock_path"; then
-        die 'cannot create the GIF cache lock; check its directory permissions'
+    # Lock the cache directory itself. Opening a predictable lock file with
+    # truncation would follow an attacker-controlled symlink.
+    if ! exec {lock_fd}<"$cache_dir"; then
+        die 'cannot open the GIF cache lock; check its directory permissions'
     fi
     if ! flock -n "$lock_fd"; then
         die 'GIF cache is busy; retry the copy after the other operation finishes'

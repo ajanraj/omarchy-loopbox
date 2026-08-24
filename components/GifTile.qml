@@ -139,6 +139,7 @@ Rectangle {
       font.family: Style.font.menuFamily
       font.pixelSize: Style.font.caption
       font.weight: tile.selected ? Font.DemiBold : Font.Normal
+      textFormat: Text.PlainText
       elide: Text.ElideRight
     }
 

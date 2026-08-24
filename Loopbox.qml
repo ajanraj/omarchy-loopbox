@@ -26,7 +26,9 @@ Item {
   property bool statusError: false
   property int requestSerial: 0
   property var state: LoopboxModel.defaultState()
-  property bool stateDirectoryReady: false
+  property bool stateLoadStarted: false
+  property bool stateLoadFinished: false
+  property bool stateStorageReady: false
   property bool stateSavePending: false
   property bool dismissAfterStateSave: false
   property string stateSaveContext: ""
@@ -53,12 +55,10 @@ Item {
     "SUPER + CTRL + SHIFT + C"
   ]
 
-  readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")
-  readonly property string stateDirectory: stateHome + "/loopbox"
-  readonly property string statePath: stateDirectory + "/state.json"
   readonly property string pluginDirectory: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
   readonly property string copyScript: pluginDirectory + "/scripts/copy-gif"
   readonly property string shortcutScript: pluginDirectory + "/scripts/shortcut"
+  readonly property string stateScript: pluginDirectory ? pluginDirectory + "/scripts/state" : ""
   readonly property string selectedShortcut: customShortcut || shortcutCandidates[shortcutCandidateIndex] || shortcutCandidates[0]
 
   property color background: Color.menu.background
@@ -175,7 +175,7 @@ Item {
     root.shortcutSetup = false
     root.shortcutChecking = false
     root.shortcutInstalling = false
-    root.statusMessage = message || root.stateStorageError || "Trending GIFs"
+    root.statusMessage = root.stateStorageError || message || "Trending GIFs"
     root.statusError = Boolean(error) || Boolean(root.stateStorageError)
     root.requestSerial += 1
     root.startSearch(root.requestSerial, "")
@@ -268,31 +268,41 @@ Item {
     root.dismissAfterStateSave = Boolean(dismissWhenSaved)
     root.stateSavePending = true
     root.pendingStateText = LoopboxModel.serializeState(root.state) + "\n"
-    if (!root.stateDirectoryReady) {
+    if (!root.stateStorageReady || stateProc.running) {
+      if (root.stateLoadFinished && !root.stateStorageReady)
+        root.reportStateSaveFailure(root.stateStorageError)
       return
     }
     if (root.pendingStateText === root.persistedStateText) {
       Qt.callLater(function() { root.finishStateSave() })
       return
     }
-    stateFile.setText(root.pendingStateText)
+    stateProc.action = "save"
+    stateProc.command = [root.stateScript, "save"]
+    stateProc.running = true
   }
 
   function stateSaveBlocksAction() {
+    if (!root.stateLoadFinished) {
+      root.statusError = false
+      root.statusMessage = "Loading Loopbox state"
+      return true
+    }
     if (!root.stateSavePending) return false
     root.statusError = false
     root.statusMessage = "Finishing the previous state save"
     return true
   }
 
-  function reportStateSaveFailure() {
+  function reportStateSaveFailure(detail) {
     var context = root.stateSaveContext || "state"
     var copied = root.dismissAfterStateSave
     root.stateSavePending = false
     root.dismissAfterStateSave = false
     root.stateSaveContext = ""
     root.pendingStateText = ""
-    root.stateStorageError = "Could not save Loopbox " + context + ". Check " + root.stateDirectory + " permissions."
+    root.stateStorageError = String(detail || "").trim()
+      || "Could not save Loopbox " + context + ". Check the Loopbox state directory permissions."
     if (root.opened) {
       root.statusError = true
       root.statusMessage = copied
@@ -311,6 +321,14 @@ Item {
     root.dismissAfterStateSave = false
     root.stateSaveContext = ""
     if (shouldDismiss) dismissTimer.restart()
+  }
+
+  function startStateLoad() {
+    if (root.stateLoadStarted || !root.stateScript || stateProc.running) return
+    root.stateLoadStarted = true
+    stateProc.action = "load"
+    stateProc.command = [root.stateScript, "load"]
+    stateProc.running = true
   }
 
   function selectedIsFavorite() {
@@ -451,7 +469,8 @@ Item {
     linkProc.running = true
   }
 
-  Component.onCompleted: stateDirectoryProc.running = true
+  Component.onCompleted: root.startStateLoad()
+  onStateScriptChanged: root.startStateLoad()
 
   ListModel { id: resultModel }
 
@@ -470,57 +489,56 @@ Item {
   }
 
   Process {
-    id: stateDirectoryProc
-    command: ["mkdir", "-p", "-m", "700", root.stateDirectory]
-    onExited: function(exitCode) {
-      root.stateDirectoryReady = exitCode === 0
-      if (root.stateDirectoryReady) {
-        if (root.stateSavePending)
-          root.saveState(root.stateSaveContext, root.dismissAfterStateSave)
-        else
-          stateFile.reload()
-      } else {
-        root.stateStorageError = "Could not access Loopbox state storage. Check " + root.stateDirectory + " permissions."
-        if (root.stateSavePending) {
-          root.reportStateSaveFailure()
-          return
-        }
-        if (root.opened) {
-          root.statusError = true
-          root.statusMessage = root.stateStorageError
-        }
-      }
-    }
-  }
+    id: stateProc
+    property string action: ""
 
-  FileView {
-    id: stateFile
-    path: root.statePath
-    watchChanges: true
-    atomicWrites: true
-    printErrors: false
-    onLoaded: {
-      root.stateStorageError = ""
-      root.state = LoopboxModel.parseState(text())
-      root.persistedStateText = LoopboxModel.serializeState(root.state) + "\n"
-      if (root.opened && root.viewMode === "favorites") root.loadFavorites()
+    stdinEnabled: true
+    stdout: StdioCollector { id: stateStdout; waitForEnd: true }
+    stderr: StdioCollector { id: stateStderr; waitForEnd: true }
+
+    onStarted: {
+      if (action === "save") write(root.pendingStateText)
     }
-    onLoadFailed: function(error) {
+
+    onExited: function(exitCode, exitStatus) {
+      var succeeded = exitCode === 0 && exitStatus === 0
+      var detail = String(stateStderr.text || "").trim()
+
+      if (action === "save") {
+        if (succeeded)
+          root.finishStateSave()
+        else
+          root.reportStateSaveFailure(detail)
+        return
+      }
+
+      root.stateLoadFinished = true
+      root.stateStorageReady = succeeded
+      if (succeeded) {
+        root.stateStorageError = ""
+        var loadedText = String(stateStdout.text || "")
+        root.state = LoopboxModel.parseState(loadedText)
+        root.persistedStateText = loadedText
+          ? LoopboxModel.serializeState(root.state) + "\n"
+          : ""
+        if (root.stateSavePending)
+          Qt.callLater(function() { root.saveState(root.stateSaveContext, root.dismissAfterStateSave) })
+        if (root.opened && root.viewMode === "favorites") root.loadFavorites()
+        return
+      }
+
       root.state = LoopboxModel.defaultState()
       root.persistedStateText = ""
-      if (error !== FileViewError.FileNotFound) {
-        root.stateStorageError = "Could not read Loopbox state. Check " + root.statePath + " permissions."
-        if (root.opened) {
-          root.statusError = true
-          root.statusMessage = root.stateStorageError
-        }
+      root.stateStorageError = detail || "Could not access Loopbox state storage. Check its permissions and file types."
+      if (root.stateSavePending) {
+        root.reportStateSaveFailure(root.stateStorageError)
+        return
+      }
+      if (root.opened) {
+        root.statusError = true
+        root.statusMessage = root.stateStorageError
       }
     }
-    onSaved: root.finishStateSave()
-    onSaveFailed: function(error) {
-      root.reportStateSaveFailure()
-    }
-    onFileChanged: reload()
   }
 
   Process {

@@ -73,7 +73,7 @@ if [[ "$#" -ne 3 || "$1" != '--copy-only' || "$2" != 'image/png' ]]; then
     exit 64
 fi
 
-if [[ -n "${FAKE_LOCK_PATH:-}" ]] && ! flock -n "$FAKE_LOCK_PATH" true; then
+if [[ -n "${FAKE_LOCK_DIR:-}" ]] && ! flock -n "$FAKE_LOCK_DIR" true; then
     printf 'cache lock was inherited by the clipboard helper\n' >&2
     exit 65
 fi
@@ -180,7 +180,11 @@ export FAKE_CLIPBOARD_CAPTURE="$clipboard_capture"
 export FAKE_CURL_COUNT_FILE="$curl_count_file"
 export FAKE_CURL_URL_LOG="$curl_url_log"
 export FAKE_FFMPEG_COUNT_FILE="$ffmpeg_count_file"
-export FAKE_LOCK_PATH="$cache_dir/.copy-gif.lock"
+export FAKE_LOCK_DIR="$cache_dir"
+
+lock_target="$test_root/lock-target"
+printf 'lock target must remain unchanged\n' >"$lock_target"
+ln -s -- "$lock_target" "$cache_dir/.copy-gif.lock"
 
 success_stdout="$test_root/success.stdout"
 success_stderr="$test_root/success.stderr"
@@ -193,6 +197,8 @@ cmp -- "$expected_clipboard_path" "$clipboard_capture" >/dev/null || fail 'clipb
 assert_file_contains '--copy-only|image/png|' "$clipboard_log" 'clipboard helper must receive copy-only image/png arguments'
 assert_file_contains "$expected_clipboard_path" "$clipboard_log" 'clipboard helper must receive the cached APNG path'
 assert_eq "$test_url" "$(<"$curl_url_log")" 'remote URL must be passed as one --url value'
+assert_eq 'lock target must remain unchanged' "$(<"$lock_target")" 'lock symlink target must not be truncated or modified'
+[[ -L "$cache_dir/.copy-gif.lock" ]] || fail 'lock symlink must not be replaced'
 
 curl_count_after_download=$(<"$curl_count_file")
 ffmpeg_count_after_conversion=$(<"$ffmpeg_count_file")

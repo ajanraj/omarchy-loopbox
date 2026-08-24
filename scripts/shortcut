@@ -2,14 +2,14 @@
 
 set -euo pipefail
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 plugin_id="io.github.ajanraj.loopbox"
 default_shortcut="SUPER + CTRL + SHIFT + L"
 hyprctl_bin=${LOOPBOX_HYPRCTL:-hyprctl}
+state_helper=${LOOPBOX_STATE_HELPER:-$script_dir/state}
 config_home=${XDG_CONFIG_HOME:-${HOME:?HOME is not set}/.config}
 bindings_file=${LOOPBOX_BINDINGS_FILE:-$config_home/hypr/bindings.lua}
 shortcut_file=${LOOPBOX_SHORTCUT_FILE:-$config_home/hypr/loopbox.lua}
-state_home=${XDG_STATE_HOME:-${HOME:?HOME is not set}/.local/state}
-skip_file=${LOOPBOX_SKIP_FILE:-$state_home/loopbox/shortcut-setup-skipped}
 begin_marker="-- BEGIN LOOPBOX SHORTCUT SETUP v1 (managed; do not edit)"
 end_marker="-- END LOOPBOX SHORTCUT SETUP"
 require_line='require("hypr.loopbox")'
@@ -76,9 +76,12 @@ conflicting_binding() {
 print_status() {
     local shortcut=$1
     local force=${2:-false}
-    local binds_json configured conflict conflict_name
+    local binds_json configured conflict conflict_name skipped
     parse_shortcut "$shortcut"
-    if [[ $force != true && -f $skip_file ]]; then
+    if ! skipped=$("$state_helper" shortcut-status 2>&1); then
+        fail "$skipped"
+    fi
+    if [[ $force != true && $skipped == true ]]; then
         jq -cn --arg shortcut "$shortcut" '{configured: false, skipped: true, shortcut: $shortcut, available: false, conflict: ""}'
         return
     fi
@@ -288,16 +291,16 @@ remove_shortcut() {
 }
 
 skip_shortcut_setup() {
-    local skip_dir
-    skip_dir=$(dirname -- "$skip_file")
-    mkdir -p -m 700 -- "$skip_dir"
-    umask 077
-    : >"$skip_file"
+    local output
+    if ! output=$("$state_helper" shortcut-skip 2>&1); then
+        fail "$output"
+    fi
     jq -cn '{skipped: true}'
 }
 
 require_command jq
 require_command "$hyprctl_bin"
+require_command "$state_helper"
 
 case ${1:-status} in
     status)

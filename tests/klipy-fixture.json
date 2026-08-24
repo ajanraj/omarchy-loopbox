@@ -62,6 +62,24 @@
       }
     },
     {
+      "id": "rich-title",
+      "title": "<img src=\"https://attacker.invalid/title.png\">Provider title stays text",
+      "content_description": "",
+      "itemurl": "https://klipy.com/gifs/rich-title",
+      "media_formats": {
+        "gif": {
+          "url": "https://static.klipy.com/original/rich-title.gif",
+          "dims": [160, 90],
+          "size": 4096
+        },
+        "nanogif": {
+          "url": "https://static.klipy.com/nano/rich-title.gif",
+          "dims": [90, 50],
+          "size": 512
+        }
+      }
+    },
+    {
       "id": "missing-original",
       "title": "This record must be ignored",
       "itemurl": "https://klipy.com/gifs/missing-original",

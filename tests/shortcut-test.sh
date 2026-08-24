@@ -173,6 +173,18 @@ assert_eq true "$(jq -r '.skipped' <<<"$skipped_status")" 'declining setup must 
 forced_status=$("$shortcut_helper" status 'SUPER + CTRL + SHIFT + L' --force)
 assert_eq false "$(jq -r '.skipped' <<<"$forced_status")" 'forced setup from the bar must ignore the declined marker'
 
+skip_file="$XDG_STATE_HOME/loopbox/shortcut-setup-skipped"
+skip_target="$test_root/shortcut-marker-target"
+printf '%s\n' 'do not change' >"$skip_target"
+rm -f -- "$skip_file"
+ln -s -- "$skip_target" "$skip_file"
+run_failure "$test_root/unsafe-marker-status.stdout" "$test_root/unsafe-marker-status.stderr" status 'SUPER + CTRL + SHIFT + L'
+(( RUN_STATUS != 0 )) || fail 'status must reject a symlinked declined marker'
+assert_contains 'must not be a symlink' "$test_root/unsafe-marker-status.stderr" 'unsafe marker status must explain recovery'
+run_failure "$test_root/unsafe-marker-skip.stdout" "$test_root/unsafe-marker-skip.stderr" skip
+(( RUN_STATUS != 0 )) || fail 'skip must reject a symlinked declined marker'
+assert_eq 'do not change' "$(<"$skip_target")" 'shortcut marker symlink target must remain unchanged'
+
 printf '%s\n' '[]' >"$binds_file"
 printf '%s\n' '-- clean config before reload failure' >"$bindings_file"
 rm -f -- "$shortcut_file"

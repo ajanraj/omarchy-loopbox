@@ -1,0 +1,258 @@
+#!/usr/bin/env python3
+
+import errno
+import json
+import os
+import secrets
+import stat
+import sys
+
+
+MAX_STATE_BYTES = 512 * 1024
+STATE_FILE = "state.json"
+SHORTCUT_MARKER = "shortcut-setup-skipped"
+
+
+class StateError(Exception):
+    pass
+
+
+def fail(message):
+    raise StateError(message)
+
+
+def state_home():
+    configured = os.environ.get("XDG_STATE_HOME")
+    if configured:
+        path = configured
+        source = "XDG_STATE_HOME"
+    else:
+        home = os.environ.get("HOME")
+        if not home:
+            fail("HOME is not set; set HOME or XDG_STATE_HOME and try again")
+        path = os.path.join(home, ".local", "state")
+        source = "HOME"
+
+    if not os.path.isabs(path) or path == os.sep or ".." in path.split(os.sep):
+        fail(f"{source} does not name a safe absolute state directory")
+    return os.path.normpath(path)
+
+
+def open_loopbox_directory():
+    root = state_home()
+    try:
+        os.makedirs(root, mode=0o700, exist_ok=True)
+        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except OSError as error:
+        fail(f"cannot access state directory {root}: {error.strerror}")
+
+    try:
+        try:
+            os.mkdir("loopbox", mode=0o700, dir_fd=root_fd)
+        except FileExistsError:
+            pass
+
+        try:
+            directory_fd = os.open(
+                "loopbox",
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=root_fd,
+            )
+        except OSError as error:
+            if error.errno in (errno.ELOOP, errno.ENOTDIR):
+                fail(f"{root}/loopbox must be a real directory, not a symlink or another file type")
+            fail(f"cannot access {root}/loopbox: {error.strerror}")
+    finally:
+        os.close(root_fd)
+
+    info = os.fstat(directory_fd)
+    if not stat.S_ISDIR(info.st_mode):
+        os.close(directory_fd)
+        fail(f"{root}/loopbox is not a directory")
+    if info.st_uid != os.getuid():
+        os.close(directory_fd)
+        fail(f"{root}/loopbox is not owned by the current user; fix its ownership and try again")
+    os.fchmod(directory_fd, 0o700)
+    return directory_fd, os.path.join(root, "loopbox")
+
+
+def checked_file(directory_fd, directory_path, name, allow_missing=True):
+    try:
+        path_info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        if allow_missing:
+            return None
+        fail(f"{directory_path}/{name} does not exist")
+    except OSError as error:
+        fail(f"cannot inspect {directory_path}/{name}: {error.strerror}")
+
+    if stat.S_ISLNK(path_info.st_mode):
+        fail(f"{directory_path}/{name} must not be a symlink; move it aside and try again")
+    if not stat.S_ISREG(path_info.st_mode):
+        fail(f"{directory_path}/{name} must be a regular file; move it aside and try again")
+    if path_info.st_uid != os.getuid():
+        fail(f"{directory_path}/{name} is not owned by the current user; fix its ownership and try again")
+    if path_info.st_nlink != 1:
+        fail(f"{directory_path}/{name} must not be a hard link; move it aside and try again")
+
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory_fd)
+    except OSError as error:
+        fail(f"cannot safely open {directory_path}/{name}: {error.strerror}")
+    opened_info = os.fstat(fd)
+    if (
+        not stat.S_ISREG(opened_info.st_mode)
+        or opened_info.st_uid != os.getuid()
+        or opened_info.st_nlink != 1
+        or opened_info.st_dev != path_info.st_dev
+        or opened_info.st_ino != path_info.st_ino
+    ):
+        os.close(fd)
+        fail(f"{directory_path}/{name} changed while it was being checked; try again")
+    return fd
+
+
+def load_state():
+    directory_fd, directory_path = open_loopbox_directory()
+    try:
+        fd = checked_file(directory_fd, directory_path, STATE_FILE)
+        if fd is None:
+            return
+        try:
+            info = os.fstat(fd)
+            if info.st_size > MAX_STATE_BYTES:
+                fail(f"{directory_path}/{STATE_FILE} exceeds the 512 KiB state limit; move it aside and try again")
+            os.fchmod(fd, 0o600)
+            chunks = []
+            remaining = MAX_STATE_BYTES + 1
+            while remaining:
+                chunk = os.read(fd, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            data = b"".join(chunks)
+            if len(data) > MAX_STATE_BYTES:
+                fail(f"{directory_path}/{STATE_FILE} exceeds the 512 KiB state limit; move it aside and try again")
+        finally:
+            os.close(fd)
+    finally:
+        os.close(directory_fd)
+    sys.stdout.buffer.write(data)
+
+
+def read_state_input():
+    line = sys.stdin.buffer.readline(MAX_STATE_BYTES + 2)
+    if not line.endswith(b"\n"):
+        fail("save input must be one newline-terminated JSON line no larger than 512 KiB")
+    if len(line) > MAX_STATE_BYTES:
+        fail("save input exceeds the 512 KiB state limit")
+    def reject_nonstandard_number(value):
+        fail(f"save input contains the non-standard JSON number {value}")
+
+    try:
+        value = json.loads(line, parse_constant=reject_nonstandard_number)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        fail(f"save input is not valid JSON: {error}")
+    if not isinstance(value, dict):
+        fail("save input must be a JSON object")
+    return line
+
+
+def atomic_write(directory_fd, directory_path, name, data):
+    existing_fd = checked_file(directory_fd, directory_path, name)
+    if existing_fd is not None:
+        os.close(existing_fd)
+
+    temp_name = f".{name}.tmp-{os.getpid()}-{secrets.token_hex(6)}"
+    temp_fd = None
+    try:
+        temp_fd = os.open(
+            temp_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        written = 0
+        while written < len(data):
+            count = os.write(temp_fd, data[written:])
+            if count == 0:
+                fail(f"could not finish writing {directory_path}/{name}")
+            written += count
+        os.fchmod(temp_fd, 0o600)
+        os.fsync(temp_fd)
+        os.close(temp_fd)
+        temp_fd = None
+
+        # Re-check before rename. renameat replaces the directory entry itself and
+        # never follows a destination symlink.
+        existing_fd = checked_file(directory_fd, directory_path, name)
+        if existing_fd is not None:
+            os.close(existing_fd)
+        os.rename(temp_name, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+        os.fsync(directory_fd)
+    finally:
+        if temp_fd is not None:
+            os.close(temp_fd)
+        try:
+            os.unlink(temp_name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+
+
+def save_state():
+    data = read_state_input()
+    directory_fd, directory_path = open_loopbox_directory()
+    try:
+        atomic_write(directory_fd, directory_path, STATE_FILE, data)
+    finally:
+        os.close(directory_fd)
+
+
+def shortcut_status():
+    directory_fd, directory_path = open_loopbox_directory()
+    try:
+        fd = checked_file(directory_fd, directory_path, SHORTCUT_MARKER)
+        if fd is None:
+            print("false")
+            return
+        try:
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(directory_fd)
+    print("true")
+
+
+def shortcut_skip():
+    directory_fd, directory_path = open_loopbox_directory()
+    try:
+        atomic_write(directory_fd, directory_path, SHORTCUT_MARKER, b"")
+    finally:
+        os.close(directory_fd)
+
+
+def main():
+    command = sys.argv[1] if len(sys.argv) == 2 else ""
+    if command == "load":
+        load_state()
+    elif command == "save":
+        save_state()
+    elif command == "shortcut-status":
+        shortcut_status()
+    elif command == "shortcut-skip":
+        shortcut_skip()
+    else:
+        fail("usage: state {load|save|shortcut-status|shortcut-skip}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except StateError as error:
+        print(f"Loopbox state: {error}", file=sys.stderr)
+        sys.exit(1)
+    except OSError as error:
+        print(f"Loopbox state: {error.strerror or error}", file=sys.stderr)
+        sys.exit(1)

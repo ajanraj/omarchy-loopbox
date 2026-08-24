@@ -20,7 +20,7 @@ Loopbox targets current Omarchy 4 releases with the Quickshell-based Omarchy she
 
 - `curl` for GIF search and downloads
 - `ffmpeg` for cached GIF-to-APNG conversion before clipboard copy
-- `jq` and `hyprctl` for safe shortcut setup
+- `python`, `jq`, and `hyprctl` for safe local state and shortcut setup
 - `wl-clipboard` through Omarchy's `omarchy-clipboard-paste-file` helper
 - Qt image format support for animated GIF previews
 
@@ -135,7 +135,9 @@ Run the focused checks from the repository root:
 
 ```bash
 node tests/model-test.js
+bash tests/qml-security-test.sh
 bash tests/clipboard-test.sh
+bash tests/state-test.sh
 bash tests/shortcut-test.sh
 omarchy plugin validate .
 ```
