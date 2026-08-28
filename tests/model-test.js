@@ -132,6 +132,114 @@ const hostileTitle = '<img src="https://attacker.invalid/title.png">Provider tit
 assert.strictEqual(parsed[3].title, hostileTitle);
 assert.strictEqual(Model.normalizeRecord(parsed[3]).title, hostileTitle);
 
+const safeOriginalUrl = "https://static.klipy.com/original/policy.gif";
+const safePreviewUrl = "https://static.klipy.com/nano/policy.gif";
+const safeTinyUrl = "https://static.klipy.com/tiny/policy.gif";
+
+function providerRecord(id, urls) {
+  const record = {
+    id: String(id),
+    media_formats: {},
+  };
+  if (urls.record !== undefined) record.url = urls.record;
+  ["gif", "nanogif", "tinygif"].forEach((format) => {
+    if (urls[format] !== undefined) {
+      record.media_formats[format] = { url: urls[format] };
+    }
+  });
+  return record;
+}
+
+const unsafeMediaUrls = [
+  "http://static.klipy.com/original/http.gif",
+  "https://user:pass@static.klipy.com/original/userinfo.gif",
+  "https://static.klipy.com.evil/original/lookalike.gif",
+  "https://static.klipy.com:443/original/port.gif",
+  "https://static.klipy.com/original/query.gif?x=1",
+  "https://static.klipy.com/original/fragment.gif#x",
+  " https://static.klipy.com/original/space.gif",
+  "https://static.klipy.com/original/control\n.gif",
+  "https://static.klipy.com/original/not-image.png",
+];
+unsafeMediaUrls.forEach((url, index) => {
+  const records = Klipy.parseResponse(JSON.stringify({
+    results: [
+      providerRecord("safe-" + index, {
+        gif: safeOriginalUrl,
+        nanogif: safePreviewUrl,
+        tinygif: safeTinyUrl,
+      }),
+      providerRecord("unsafe-" + index, { gif: url }),
+    ],
+  }));
+  assert.deepStrictEqual(plain(records.map((record) => record.id)), ["safe-" + index]);
+});
+
+const recordUrlFallback = Klipy.parseResponse(JSON.stringify({
+  results: [providerRecord("record-url-fallback", {
+    record: safeOriginalUrl,
+    gif: unsafeMediaUrls[0],
+    nanogif: unsafeMediaUrls[4],
+    tinygif: safeTinyUrl,
+  })],
+}))[0];
+assert.strictEqual(recordUrlFallback.originalUrl, safeOriginalUrl);
+assert.strictEqual(recordUrlFallback.previewUrl, safeTinyUrl);
+
+const originalOnlyFallback = Klipy.parseResponse(JSON.stringify({
+  results: [providerRecord("original-only-fallback", {
+    gif: safeOriginalUrl,
+    nanogif: unsafeMediaUrls[4],
+    tinygif: unsafeMediaUrls[5],
+  })],
+}))[0];
+assert.strictEqual(originalOnlyFallback.previewUrl, safeOriginalUrl);
+
+const mixedPolicyRecords = Klipy.parseResponse(JSON.stringify({
+  results: [
+    providerRecord("safe-original", { gif: safeOriginalUrl }),
+    providerRecord("unsafe-original", {
+      record: unsafeMediaUrls[2],
+      gif: unsafeMediaUrls[0],
+    }),
+  ],
+}));
+assert.deepStrictEqual(plain(mixedPolicyRecords.map((record) => record.id)), ["safe-original"]);
+
+const unsafePreviewRecord = Object.assign(result("unsafe-preview"), {
+  previewUrl: unsafeMediaUrls[4],
+  shareUrl: unsafeMediaUrls[2],
+});
+const normalizedUnsafePreview = Model.normalizeRecord(unsafePreviewRecord);
+assert.strictEqual(normalizedUnsafePreview.previewUrl, normalizedUnsafePreview.originalUrl);
+assert.strictEqual(normalizedUnsafePreview.shareUrl, normalizedUnsafePreview.originalUrl);
+assert.strictEqual(
+  Model.normalizeRecord(Object.assign(result("unsafe-persisted"), {
+    originalUrl: unsafeMediaUrls[0],
+  })),
+  null,
+);
+assert.strictEqual(
+  Model.normalizeRecord(Object.assign(result("other-provider"), { provider: "other" })),
+  null,
+);
+
+const policyState = Model.parseState(JSON.stringify({
+  version: 1,
+  favorites: [
+    unsafePreviewRecord,
+    Object.assign(result("unsafe-persisted"), { originalUrl: unsafeMediaUrls[0] }),
+    result("safe-persisted"),
+  ],
+  recents: [],
+}));
+assert.deepStrictEqual(plain(policyState.favorites.map((record) => record.id)), [
+  "unsafe-preview",
+  "safe-persisted",
+]);
+assert.strictEqual(policyState.favorites[0].previewUrl, policyState.favorites[0].originalUrl);
+assert.strictEqual(policyState.favorites[0].shareUrl, policyState.favorites[0].originalUrl);
+
 assert.throws(() => Klipy.parseResponse("not JSON"), /Klipy response is not valid JSON/);
 assert.throws(() => Klipy.parseResponse(JSON.stringify({ error: "rate limited" })), /Klipy provider error: rate limited/);
 assert.throws(() => Klipy.parseResponse(JSON.stringify({ results: [{}] })), /Klipy response contained no valid results/);

@@ -6,6 +6,9 @@ readonly download_max_bytes=$((15 * 1024 * 1024))
 readonly cache_max_bytes=$((150 * 1024 * 1024))
 readonly max_files=20
 readonly default_clipboard_helper=/usr/share/omarchy/bin/omarchy-clipboard-paste-file
+readonly script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+readonly media_url="$script_dir/media-url"
+readonly media_download="$script_dir/media-download"
 
 die() {
     printf 'copy-gif: error: %s\n' "$*" >&2
@@ -20,8 +23,10 @@ url=$1
 provider=$2
 gif_id=$3
 
-[[ -n "$url" ]] || die 'URL must not be empty; provide the original GIF URL'
-[[ "$url" =~ ^https?://[^[:space:]]+$ ]] || die 'URL must use http or https and contain no whitespace'
+[[ "$provider" == 'klipy' ]] || die "unsupported provider '$provider'; only klipy GIFs can be copied"
+if ! "$media_url" validate "$url"; then
+    die 'unsafe KLIPY media URL; use an original https://static.klipy.com/...gif URL'
+fi
 
 validate_segment() {
     local kind=$1
@@ -169,39 +174,8 @@ if [[ -e "$target" || -L "$target" ]]; then
 fi
 
 if [[ ! -e "$target" ]]; then
-    if ! tmp_file=$(mktemp "$cache_dir/.copy-gif.XXXXXX"); then
-        die 'cannot create a temporary GIF in the cache directory; check its permissions'
-    fi
-
-    curl_args=(
-        --fail
-        --silent
-        --show-error
-        --location
-        --connect-timeout 3
-        --max-time 8
-        --max-filesize "$download_max_bytes"
-        --url "$url"
-        --output "$tmp_file"
-    )
-    if ! curl "${curl_args[@]}"; then
-        if [[ -f "$tmp_file" ]]; then
-            failed_size=$(wc -c <"$tmp_file" 2>/dev/null || true)
-            failed_size=${failed_size//[[:space:]]/}
-            if [[ "$failed_size" =~ ^[0-9]+$ ]] && ((failed_size > download_max_bytes)); then
-                die 'download exceeds the 15 MiB limit; choose a smaller GIF'
-            fi
-        fi
-        die 'download failed; check the URL, network connection, and provider response'
-    fi
-
-    if ! validate_gif "$tmp_file" downloaded; then
-        die "$validation_error; retry or choose another GIF"
-    fi
-    if ! mv -f -- "$tmp_file" "$target"; then
-        die 'cannot atomically cache the GIF; check cache permissions and retry'
-    fi
-    tmp_file=''
+    "$media_download" "$url" "$target" \
+        || die 'download failed; check the URL, network connection, and provider response'
 fi
 
 if [[ -e "$clipboard_target" || -L "$clipboard_target" ]]; then

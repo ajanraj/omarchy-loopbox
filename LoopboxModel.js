@@ -4,6 +4,7 @@ var STATE_VERSION = 1;
 var MAX_FAVORITES = 50;
 var MAX_RECENTS = 20;
 var DEFAULT_COLUMNS = 4;
+var KLIPY_MEDIA_PREFIX = "https://static.klipy.com/";
 
 function defaultState() {
   return { version: STATE_VERSION, favorites: [], recents: [] };
@@ -15,6 +16,29 @@ function isObject(value) {
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * Keep persisted provider media URLs on the exact static host. This is
+ * string-based because QML's JavaScript runtime does not consistently expose
+ * the WHATWG URL parser.
+ */
+function safeKlipyMediaUrl(value) {
+  if (typeof value !== "string" || !value) {
+    return "";
+  }
+  if (/[\s\x00-\x1f\x7f-\x9f]/.test(value)) {
+    return "";
+  }
+  if (value.indexOf(KLIPY_MEDIA_PREFIX) !== 0) {
+    return "";
+  }
+
+  var path = value.slice(KLIPY_MEDIA_PREFIX.length);
+  if (!path || path.indexOf("?") !== -1 || path.indexOf("#") !== -1) {
+    return "";
+  }
+  return path.slice(-4) === ".gif" ? value : "";
 }
 
 function nonNegativeInteger(value) {
@@ -45,18 +69,19 @@ function normalizeRecord(record) {
 
   var provider = text(record.provider);
   var id = text(record.id);
-  var originalUrl = text(record.originalUrl);
-  if (!provider || !id || !originalUrl) {
+  var originalUrl = safeKlipyMediaUrl(record.originalUrl);
+  if (provider !== "klipy" || !id || !originalUrl) {
     return null;
   }
 
-  var previewUrl = text(record.previewUrl) || originalUrl;
+  var previewUrl = safeKlipyMediaUrl(record.previewUrl) || originalUrl;
+  var shareUrl = safeKlipyMediaUrl(record.shareUrl) || originalUrl;
   return {
     provider: provider,
     id: id,
     title: text(record.title),
     pageUrl: text(record.pageUrl),
-    shareUrl: text(record.shareUrl) || originalUrl,
+    shareUrl: shareUrl,
     originalUrl: originalUrl,
     previewUrl: previewUrl,
     width: nonNegativeInteger(record.width),

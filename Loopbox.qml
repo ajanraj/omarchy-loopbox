@@ -57,6 +57,7 @@ Item {
 
   readonly property string pluginDirectory: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
   readonly property string copyScript: pluginDirectory + "/scripts/copy-gif"
+  readonly property string previewScript: pluginDirectory + "/scripts/preview-gif"
   readonly property string shortcutScript: pluginDirectory + "/scripts/shortcut"
   readonly property string stateScript: pluginDirectory ? pluginDirectory + "/scripts/state" : ""
   readonly property string selectedShortcut: customShortcut || shortcutCandidates[shortcutCandidateIndex] || shortcutCandidates[0]
@@ -922,6 +923,9 @@ Item {
               width: resultGrid.cellWidth - Style.spacing.sm
               height: resultGrid.cellHeight - Style.spacing.sm
               selected: index === root.selectedIndex
+              previewScript: root.previewScript
+              provider: model.provider
+              resultId: model.resultId
               busy: root.copying && index === root.copyingIndex
               favourite: {
                 var row = root.resultAt(index)

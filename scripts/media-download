@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly download_max_bytes=$((15 * 1024 * 1024))
+readonly script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+readonly media_url="$script_dir/media-url"
+
+die() {
+    printf 'media-download: error: %s\n' "$*" >&2
+    exit 1
+}
+
+if (($# != 2)); then
+    die "usage: $0 <url> <target>"
+fi
+
+url=$1
+target=$2
+target_dir=$(dirname -- "$target")
+
+if ! "$media_url" validate "$url"; then
+    die 'unsafe KLIPY media URL; use an https://static.klipy.com/...gif URL'
+fi
+[[ -d "$target_dir" && ! -L "$target_dir" ]] || die 'target directory must be a real directory'
+[[ ! -e "$target" && ! -L "$target" ]] || die 'target already exists'
+
+tmp_file=''
+cleanup() {
+    local exit_status=$?
+    if [[ -n "$tmp_file" && -e "$tmp_file" ]]; then
+        rm -f -- "$tmp_file" || true
+    fi
+    return "$exit_status"
+}
+trap cleanup EXIT
+
+if ! resolve_value=$(timeout 3s "$media_url" resolve "$url"); then
+    die 'cannot safely resolve static.klipy.com within 3 seconds; check DNS and retry'
+fi
+if ! tmp_file=$(mktemp "$target_dir/.media-download.XXXXXX"); then
+    die 'cannot create a temporary media file; check cache permissions'
+fi
+
+curl_args=(
+    --disable
+    --fail
+    --silent
+    --show-error
+    --noproxy '*'
+    --proto '=https'
+    --proto-redir '=https'
+    --connect-timeout 3
+    --max-time 8
+    --max-filesize "$download_max_bytes"
+    --resolve "$resolve_value"
+    --url "$url"
+    --output "$tmp_file"
+    --write-out '%{http_code}'
+)
+if ! http_status=$(curl "${curl_args[@]}"); then
+    failed_size=$(wc -c <"$tmp_file" 2>/dev/null || true)
+    failed_size=${failed_size//[[:space:]]/}
+    if [[ "$failed_size" =~ ^[0-9]+$ ]] && ((failed_size > download_max_bytes)); then
+        die 'download exceeds the 15 MiB limit; choose a smaller GIF'
+    fi
+    die 'download failed; check the network connection and provider response'
+fi
+[[ "$http_status" == '200' ]] || die "KLIPY download returned HTTP $http_status; expected HTTP 200"
+
+size=$(wc -c <"$tmp_file" 2>/dev/null || true)
+size=${size//[[:space:]]/}
+[[ "$size" =~ ^[0-9]+$ ]] && ((size > 0)) || die 'downloaded file is empty'
+((size <= download_max_bytes)) || die 'download exceeds the 15 MiB limit; choose a smaller GIF'
+magic=$(head -c 6 -- "$tmp_file" 2>/dev/null || true)
+[[ "$magic" == 'GIF87a' || "$magic" == 'GIF89a' ]] \
+    || die 'downloaded file is not a GIF; expected GIF87a or GIF89a magic'
+
+if ! mv -T -- "$tmp_file" "$target"; then
+    die 'cannot atomically cache the GIF; check cache permissions and retry'
+fi
+tmp_file=''

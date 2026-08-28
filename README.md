@@ -20,7 +20,8 @@ Loopbox targets current Omarchy 4 releases with the Quickshell-based Omarchy she
 
 - `curl` for GIF search and downloads
 - `ffmpeg` for cached GIF-to-APNG conversion before clipboard copy
-- `python`, `jq`, and `hyprctl` for safe local state and shortcut setup
+- `python3`, `jq`, and `hyprctl` for media URL checks, safe local state, and shortcut setup
+- Standard `coreutils` and `util-linux` tools for bounded downloads and cache coordination
 - `wl-clipboard` through Omarchy's `omarchy-clipboard-paste-file` helper
 - Qt image format support for animated GIF previews
 
@@ -78,7 +79,7 @@ After Enter succeeds, Loopbox closes and the animation is ready to paste with `S
 
 Loopbox uses KLIPY results through Raycast's GIF Search proxy at `gif-search.raycast.com`. This provides install-to-search behavior without asking users for an API key. The proxy is an external, undocumented dependency with no availability guarantee, so provider failures are reported in the overlay and isolated to one adapter for future replacement.
 
-Search queries are sent to Raycast's proxy and KLIPY. Preview and original images are fetched from the URLs returned by that service. Loopbox has no analytics and sends no favourites, recents, clipboard contents, or local files.
+Search queries are sent to Raycast's proxy and KLIPY. Loopbox accepts preview and original images only from KLIPY's HTTPS media host. Uncached GIFs and previews are downloaded directly from publicly routable addresses without following redirects. Loopbox has no analytics and sends no favourites, recents, clipboard contents, or local files.
 
 GIF results and content are provided by [KLIPY](https://klipy.com/). Their terms and the rights attached to individual media still apply.
 
@@ -88,10 +89,11 @@ Loopbox stores only:
 
 - Favourites and recents in `$XDG_STATE_HOME/loopbox/state.json` (default: `~/.local/state/loopbox/state.json`)
 - Copied original GIFs and their clipboard-ready APNG files in `$XDG_CACHE_HOME/loopbox/gifs/` (default: `~/.cache/loopbox/gifs/`)
+- Hardened local preview GIFs in `$XDG_CACHE_HOME/loopbox/previews/` (default: `~/.cache/loopbox/previews/`)
 - The confirmed shortcut in `~/.config/hypr/loopbox.lua`, loaded by a marked block in `~/.config/hypr/bindings.lua`
 - A shortcut-declined marker at `$XDG_STATE_HOME/loopbox/shortcut-setup-skipped`
 
-The cache is bounded to 20 GIF/APNG pairs and 150 MiB. Search responses and previews are not persisted by Loopbox.
+The copy cache is bounded to 20 GIF/APNG pairs and 150 MiB. The preview cache is bounded to 16 GIFs and 120 MiB. Search responses are not persisted.
 
 ## Troubleshooting
 
@@ -135,8 +137,10 @@ Run the focused checks from the repository root:
 
 ```bash
 node tests/model-test.js
+python3 tests/media-url-test.py
 bash tests/qml-security-test.sh
 bash tests/clipboard-test.sh
+bash tests/preview-test.sh
 bash tests/state-test.sh
 bash tests/shortcut-test.sh
 omarchy plugin validate .

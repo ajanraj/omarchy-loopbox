@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell.Io
 import qs.Commons
 
 Rectangle {
@@ -7,11 +8,18 @@ Rectangle {
   required property int index
   required property string title
   required property string previewUrl
+  required property string previewScript
+  required property string provider
+  required property string resultId
   required property bool selected
   property bool favourite: false
   property bool busy: false
   property bool pooled: false
   property bool previewFailed: false
+  property bool componentReady: false
+  property bool stoppingPreview: false
+  property int previewSerial: 0
+  property string localPreviewPath: ""
   property color foreground: Color.menu.text
   property color selectedForeground: Color.menu.selectedText
   property color selectedBackground: Color.menu.selectedBackground
@@ -24,6 +32,99 @@ Rectangle {
   readonly property bool inViewport: view
     && y + height >= view.contentY
     && y <= view.contentY + view.height
+  readonly property bool previewError: previewFailed || preview.status === AnimatedImage.Error
+
+  function queuePreview() {
+    previewSerial += 1
+    localPreviewPath = ""
+    previewFailed = false
+    if (!componentReady) return
+    if (previewProc.running || stoppingPreview) {
+      stoppingPreview = true
+      previewProc.running = false
+      return
+    }
+    Qt.callLater(startPreview)
+  }
+
+  function startPreview() {
+    if (!componentReady || pooled || previewProc.running || stoppingPreview || localPreviewPath
+        || !previewScript || !previewUrl || provider !== "klipy" || !resultId) return
+    previewProc.requestSerial = previewSerial
+    previewProc.expectedUrl = previewUrl
+    previewProc.expectedProvider = provider
+    previewProc.expectedResultId = resultId
+    previewProc.command = [previewScript, previewUrl]
+    previewProc.launchPending = true
+    previewProc.running = true
+  }
+
+  function reportPreviewFailure() {
+    if (previewFailed) return
+    previewFailed = true
+    imageFailed(index)
+  }
+
+  onPreviewUrlChanged: queuePreview()
+  onPreviewScriptChanged: queuePreview()
+  onProviderChanged: queuePreview()
+  onResultIdChanged: queuePreview()
+
+  Component.onCompleted: {
+    componentReady = true
+    queuePreview()
+  }
+
+  Process {
+    id: previewProc
+    property bool launchPending: false
+    property int requestSerial: 0
+    property string expectedUrl: ""
+    property string expectedProvider: ""
+    property string expectedResultId: ""
+
+    stdout: StdioCollector { id: previewStdout; waitForEnd: true }
+
+    onStarted: launchPending = false
+    onRunningChanged: {
+      if (!running && launchPending) {
+        Qt.callLater(function() {
+          if (!previewProc.running && previewProc.launchPending) {
+            previewProc.launchPending = false
+            tile.stoppingPreview = false
+            var currentRequest = previewProc.requestSerial === tile.previewSerial
+              && previewProc.expectedUrl === tile.previewUrl
+              && previewProc.expectedProvider === tile.provider
+              && previewProc.expectedResultId === tile.resultId
+              && !tile.pooled
+            if (currentRequest)
+              tile.reportPreviewFailure()
+            else
+              Qt.callLater(tile.startPreview)
+          }
+        })
+      }
+    }
+
+    onExited: function(exitCode, exitStatus) {
+      launchPending = false
+      tile.stoppingPreview = false
+      var currentRequest = requestSerial === tile.previewSerial
+        && expectedUrl === tile.previewUrl
+        && expectedProvider === tile.provider
+        && expectedResultId === tile.resultId
+        && !tile.pooled
+      if (!currentRequest) {
+        Qt.callLater(tile.startPreview)
+        return
+      }
+      var path = String(previewStdout.text || "").trim()
+      if (exitCode === 0 && exitStatus === 0 && path.charAt(0) === "/")
+        tile.localPreviewPath = path
+      else
+        tile.reportPreviewFailure()
+    }
+  }
 
   radius: Style.cornerRadius
   scale: selected ? 0.97 : 1
@@ -41,7 +142,8 @@ Rectangle {
     id: preview
     anchors.fill: parent
     anchors.margins: tile.selected ? Style.space(4) : 0
-    source: tile.previewUrl
+    // Provider URLs are inputs to preview-gif only. Qt decodes local cache files.
+    source: tile.localPreviewPath
     sourceSize.width: Math.min(Math.ceil(tile.width), 420)
     sourceSize.height: Math.min(Math.ceil(tile.height), 260)
     fillMode: Image.PreserveAspectCrop
@@ -52,11 +154,9 @@ Rectangle {
 
     Behavior on opacity { NumberAnimation { duration: 100 } }
 
-    onSourceChanged: tile.previewFailed = false
     onStatusChanged: {
       if (status === AnimatedImage.Error && !tile.previewFailed) {
-        tile.previewFailed = true
-        tile.imageFailed(tile.index)
+        tile.reportPreviewFailure()
       }
     }
   }
@@ -99,9 +199,9 @@ Rectangle {
 
       Text {
         width: parent.width
-        text: preview.status === AnimatedImage.Error ? "󰋩" : "󰔟"
-        color: preview.status === AnimatedImage.Error ? Color.urgent : tile.foreground
-        opacity: preview.status === AnimatedImage.Error ? 0.9 : 0.55
+        text: tile.previewError ? "󰋩" : "󰔟"
+        color: tile.previewError ? Color.urgent : tile.foreground
+        opacity: tile.previewError ? 0.9 : 0.55
         font.family: Style.font.menuFamily
         font.pixelSize: Style.font.display
         horizontalAlignment: Text.AlignHCenter
@@ -109,7 +209,7 @@ Rectangle {
 
       Text {
         width: parent.width
-        text: preview.status === AnimatedImage.Error ? "Preview unavailable" : "Loading preview"
+        text: tile.previewError ? "Preview unavailable" : "Loading preview"
         color: tile.foreground
         opacity: 0.68
         font.family: Style.font.menuFamily
@@ -164,6 +264,12 @@ Rectangle {
     onClicked: tile.activated(tile.index)
   }
 
-  GridView.onPooled: pooled = true
-  GridView.onReused: pooled = false
+  GridView.onPooled: {
+    pooled = true
+    queuePreview()
+  }
+  GridView.onReused: {
+    pooled = false
+    queuePreview()
+  }
 }

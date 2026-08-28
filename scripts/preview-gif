@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly cache_max_bytes=$((120 * 1024 * 1024))
+readonly max_files=16
+readonly script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+readonly media_url="$script_dir/media-url"
+readonly media_download="$script_dir/media-download"
+
+die() {
+    printf 'preview-gif: error: %s\n' "$*" >&2
+    exit 1
+}
+
+if (($# != 1)); then
+    die "usage: $0 <url>"
+fi
+url=$1
+
+# Validate before deriving or consulting a cache path. A poisoned provider or
+# state URL must never turn an existing local entry into a successful request.
+if ! "$media_url" validate "$url"; then
+    die 'unsafe KLIPY preview URL; use an https://static.klipy.com/...gif URL'
+fi
+
+cache_root=${XDG_CACHE_HOME:-${HOME:+$HOME/.cache}}
+[[ -n "$cache_root" ]] || die 'XDG_CACHE_HOME or HOME must be set so previews can be cached'
+cache_dir="$cache_root/loopbox/previews"
+mkdir -p -- "$cache_dir" || die 'cannot create the preview cache directory'
+[[ -d "$cache_dir" && ! -L "$cache_dir" ]] || die 'preview cache must be a real directory'
+
+cache_key=$(printf '%s' "$url" | sha256sum)
+cache_key=${cache_key%% *}
+[[ "$cache_key" =~ ^[0-9a-f]{64}$ ]] || die 'cannot derive a preview cache key'
+target="$cache_dir/$cache_key.gif"
+
+lock_fd=''
+listing_file=''
+release_lock() {
+    if [[ -n "$lock_fd" ]]; then
+        flock -u "$lock_fd" || return 1
+        exec {lock_fd}>&-
+        lock_fd=''
+    fi
+}
+
+acquire_lock() {
+    if ! exec {lock_fd}<"$cache_dir" || ! flock "$lock_fd"; then
+        return 1
+    fi
+}
+
+cleanup() {
+    local exit_status=$?
+    if [[ -n "$listing_file" && -e "$listing_file" ]]; then
+        rm -f -- "$listing_file" || true
+    fi
+    release_lock || true
+    return "$exit_status"
+}
+trap cleanup EXIT
+
+command -v flock >/dev/null 2>&1 || die 'flock is required to coordinate preview cache updates'
+acquire_lock || die 'cannot lock the preview cache; retry the preview'
+
+validate_cached_gif() {
+    local file=$1
+    local size magic
+    [[ -f "$file" && ! -L "$file" ]] || return 1
+    size=$(wc -c <"$file" 2>/dev/null || true)
+    size=${size//[[:space:]]/}
+    [[ "$size" =~ ^[0-9]+$ ]] && ((size > 0 && size <= 15 * 1024 * 1024)) || return 1
+    magic=$(head -c 6 -- "$file" 2>/dev/null || true)
+    [[ "$magic" == 'GIF87a' || "$magic" == 'GIF89a' ]]
+}
+
+if [[ -e "$target" || -L "$target" ]]; then
+    if validate_cached_gif "$target"; then
+        touch -m -- "$target" || die 'cannot update the cached preview timestamp'
+    else
+        rm -f -- "$target" || die 'cannot remove an invalid cached preview'
+    fi
+fi
+
+# Do not serialize the eight first-load downloads. Each process writes a unique
+# temporary file, and media-download atomically replaces a same-URL race.
+cache_hit=0
+[[ -e "$target" ]] && cache_hit=1
+release_lock || die 'cannot release the preview cache lock'
+if (( ! cache_hit )); then
+    if ! "$media_download" "$url" "$target"; then
+        # Another delegate may have completed the same URL after our miss.
+        acquire_lock || die 'cannot recheck the preview cache after a concurrent download'
+        validate_cached_gif "$target" \
+            || die 'preview download failed; check the network connection and retry'
+        touch -m -- "$target" || die 'cannot update the cached preview timestamp'
+        release_lock || die 'cannot release the preview cache lock'
+    fi
+fi
+
+acquire_lock || die 'cannot lock the preview cache for pruning'
+listing_file=$(mktemp "$cache_dir/.preview-list.XXXXXX") \
+    || die 'cannot create a preview cache listing'
+if ! find "$cache_dir" -maxdepth 1 -type f -name '*.gif' -printf '%T@ %s %p\0' \
+    | sort -z -n >"$listing_file"; then
+    die 'cannot scan the preview cache for pruning; check its permissions'
+fi
+mapfile -d '' entries <"$listing_file"
+rm -f -- "$listing_file" || die 'cannot remove the preview cache listing'
+listing_file=''
+count=${#entries[@]}
+total=0
+for entry in "${entries[@]}"; do
+    fields=${entry#* }
+    size=${fields%% *}
+    [[ "$size" =~ ^[0-9]+$ ]] || die 'cached preview size is unreadable'
+    total=$((total + size))
+done
+for entry in "${entries[@]}"; do
+    ((count > max_files || total > cache_max_bytes)) || break
+    fields=${entry#* }
+    size=${fields%% *}
+    file=${fields#* }
+    [[ "$file" == "$target" ]] && continue
+    [[ -f "$file" && ! -L "$file" ]] || continue
+    rm -f -- "$file" || die 'cannot prune an old cached preview'
+    count=$((count - 1))
+    total=$((total - size))
+done
+((count <= max_files && total <= cache_max_bytes)) \
+    || die 'preview cache remains over its limit because the current file must be retained'
+
+printf '%s\n' "$target"

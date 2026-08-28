@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+
+import ipaddress
+import socket
+import sys
+import unicodedata
+from urllib.parse import urlsplit
+
+
+HOST = "static.klipy.com"
+PORT = 443
+
+
+class MediaUrlError(ValueError):
+    pass
+
+
+def validate_url(url: str) -> None:
+    if any(character.isspace() or unicodedata.category(character) == "Cc" for character in url):
+        raise MediaUrlError("URL must not contain whitespace or control characters")
+    if not url.startswith("https://"):
+        raise MediaUrlError("URL scheme must be exactly 'https'")
+
+    try:
+        parsed = urlsplit(url)
+    except ValueError as error:
+        raise MediaUrlError(f"URL cannot be parsed: {error}") from error
+
+    if parsed.scheme != "https":
+        raise MediaUrlError("URL scheme must be exactly 'https'")
+    if parsed.netloc != HOST:
+        raise MediaUrlError(f"URL host must be exactly '{HOST}' with no credentials or port")
+    if not parsed.path.startswith("/") or parsed.path == "/" or not parsed.path.endswith(".gif"):
+        raise MediaUrlError("URL path must be nonempty and end with '.gif'")
+    if "?" in url:
+        raise MediaUrlError("URL must not contain a query string")
+    if "#" in url:
+        raise MediaUrlError("URL must not contain a fragment")
+
+
+def resolve_url(url: str) -> str:
+    validate_url(url)
+
+    try:
+        records = socket.getaddrinfo(HOST, PORT, type=socket.SOCK_STREAM)
+    except OSError as error:
+        raise MediaUrlError(f"cannot resolve {HOST}: {error}") from error
+
+    addresses = []
+    seen = set()
+    for record in records:
+        address_text = record[4][0]
+        try:
+            address = ipaddress.ip_address(address_text)
+        except ValueError as error:
+            raise MediaUrlError(f"resolver returned an invalid IP address: {address_text}") from error
+        if not address.is_global or address.is_multicast:
+            raise MediaUrlError(f"resolver returned a non-global IP address: {address}")
+        normalized = str(address)
+        if normalized not in seen:
+            seen.add(normalized)
+            addresses.append(f"[{normalized}]" if address.version == 6 else normalized)
+
+    if not addresses:
+        raise MediaUrlError(f"resolver returned no addresses for {HOST}")
+
+    return f"{HOST}:{PORT}:{','.join(addresses)}"
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 3 or argv[1] not in {"validate", "resolve"}:
+        print(f"usage: {argv[0]} <validate|resolve> <URL>", file=sys.stderr)
+        return 2
+
+    try:
+        if argv[1] == "validate":
+            validate_url(argv[2])
+        else:
+            print(resolve_url(argv[2]))
+    except MediaUrlError as error:
+        print(f"media-url: error: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

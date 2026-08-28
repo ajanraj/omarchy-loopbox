@@ -6,6 +6,7 @@ var KLIPY_ENDPOINT = "https://gif-search.raycast.com/api/klipy";
 var DEFAULT_LIMIT = 8;
 var MAX_LIMIT = 8;
 var MAX_RESPONSE_BYTES = 256 * 1024;
+var KLIPY_MEDIA_PREFIX = "https://static.klipy.com/";
 
 function safeLimit(limit) {
   var numeric = Number(limit);
@@ -73,6 +74,29 @@ function httpUrl(value) {
   return /^https?:\/\//i.test(text) ? text : "";
 }
 
+/**
+ * Keep provider media URLs on the exact static host. This is deliberately
+ * string-based because QML's JavaScript runtime does not consistently expose
+ * the WHATWG URL parser.
+ */
+function safeKlipyMediaUrl(value) {
+  if (typeof value !== "string" || !value) {
+    return "";
+  }
+  if (/[\s\x00-\x1f\x7f-\x9f]/.test(value)) {
+    return "";
+  }
+  if (value.indexOf(KLIPY_MEDIA_PREFIX) !== 0) {
+    return "";
+  }
+
+  var path = value.slice(KLIPY_MEDIA_PREFIX.length);
+  if (!path || path.indexOf("?") !== -1 || path.indexOf("#") !== -1) {
+    return "";
+  }
+  return path.slice(-4) === ".gif" ? value : "";
+}
+
 function idText(value) {
   if (typeof value === "string") {
     return value.trim();
@@ -96,7 +120,7 @@ function mediaObject(media) {
 }
 
 function mediaUrl(media) {
-  return isObject(media) ? httpUrl(media.url) : "";
+  return isObject(media) ? safeKlipyMediaUrl(media.url) : "";
 }
 
 function mediaDims(media) {
@@ -139,7 +163,7 @@ function normalizeRecord(record) {
   var gif = mediaObject(media.gif);
   var nanogif = mediaObject(media.nanogif);
   var tinygif = mediaObject(media.tinygif);
-  var originalUrl = mediaUrl(gif) || httpUrl(record.url);
+  var originalUrl = mediaUrl(gif) || safeKlipyMediaUrl(record.url);
   if (!originalUrl) {
     return null;
   }
