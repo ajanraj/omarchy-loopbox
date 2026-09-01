@@ -53,6 +53,18 @@ grep -F 'previewScript: root.previewScript' "$loopbox" >/dev/null || {
     printf 'FAIL: preview delegates must receive the local preview helper\n' >&2
     exit 1
 }
+if grep -Eq '^[[:space:]]*(provider|resultId):[[:space:]]*model\.' "$loopbox"; then
+    printf 'FAIL: ListModel roles must use required-property injection, not an undefined model object\n' >&2
+    exit 1
+fi
+grep -F 'required property string provider' "$gif_tile" >/dev/null || {
+    printf 'FAIL: preview delegates must inject the provider ListModel role\n' >&2
+    exit 1
+}
+grep -F 'required property string resultId' "$gif_tile" >/dev/null || {
+    printf 'FAIL: preview delegates must inject the resultId ListModel role\n' >&2
+    exit 1
+}
 
 qmllint "$gif_tile"
 printf 'PASS: QML provider text and local preview security contracts\n'
