@@ -49,34 +49,44 @@ Item {
     anchors.verticalCenter: parent.verticalCenter
     spacing: Style.spacing.lg
 
-    Text {
-      anchors.verticalCenter: parent.verticalCenter
-      text: "Enter  copy GIF    Shift+Enter  copy link"
-      color: root.foreground
-      opacity: 0.62
-      font.family: Style.font.menuFamily
-      font.pixelSize: Style.font.caption
+    KeyHint {
+      chord: "Space"
+      action: "Preview"
+      foreground: root.foreground
+    }
+
+    KeyHint {
+      chord: "Enter"
+      action: "Copy GIF"
+      foreground: root.foreground
+    }
+
+    KeyHint {
+      chord: "Shift+Enter"
+      action: "Copy link"
+      foreground: root.foreground
     }
 
     Rectangle {
-      width: shortcutLabel.implicitWidth + Style.spacing.xl * 2
-      height: Math.max(Style.space(28), shortcutLabel.implicitHeight + Style.spacing.sm * 2)
-      radius: Style.cornerRadius
-      color: shortcutMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"
-      border.color: shortcutMouse.containsMouse ? Color.accent : Style.normalBorderFor(root.foreground, Color.accent)
-      border.width: Math.max(1, Style.space(1))
+      anchors.verticalCenter: parent.verticalCenter
+      width: Math.max(1, Style.space(1))
+      height: Style.space(24)
+      color: Style.normalBorderFor(root.foreground, Color.accent)
+      opacity: 0.72
+    }
 
-      Text {
-        id: shortcutLabel
-        anchors.centerIn: parent
-        text: root.shortcut
-          ? "⌨  " + String(root.shortcut).replace(/ \+ /g, " ")
-          : "⌨  Set shortcut"
-        color: shortcutMouse.containsMouse ? Color.accent : root.foreground
-        opacity: shortcutMouse.containsMouse ? 1 : 0.82
-        font.family: Style.font.menuFamily
-        font.pixelSize: Style.font.caption
-        font.weight: Font.DemiBold
+    Item {
+      width: shortcutHint.implicitWidth
+      height: shortcutHint.implicitHeight
+
+      KeyHint {
+        id: shortcutHint
+        chord: root.shortcut
+          ? String(root.shortcut).replace(/ \+ /g, " ")
+          : "Unassigned"
+        action: root.shortcut ? "Launch shortcut" : "Set shortcut"
+        foreground: root.foreground
+        highlighted: shortcutMouse.containsMouse
       }
 
       MouseArea {

@@ -3,7 +3,9 @@
 set -euo pipefail
 
 readonly cache_max_bytes=$((120 * 1024 * 1024))
-readonly max_files=16
+# Retain two 24-result pages so a later delegate cannot remove a file that a
+# visible card is still decoding. The byte ceiling remains the stronger bound.
+readonly max_files=48
 readonly script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly media_url="$script_dir/media-url"
 readonly media_download="$script_dir/media-download"

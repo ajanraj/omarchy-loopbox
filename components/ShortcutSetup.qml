@@ -17,6 +17,10 @@ Item {
   property bool available: false
   property bool checking: false
   property bool installing: false
+  property bool launcherInstalled: false
+  property bool launcherChecking: false
+  property bool launcherInstalling: false
+  property string launcherError: ""
   property int candidateIndex: 0
   property int candidateCount: 1
 
@@ -25,6 +29,7 @@ Item {
   signal installRequested()
   signal skipRequested()
   signal cancelRequested()
+  signal launcherInstallRequested()
 
   function displayShortcut(value) {
     return String(value || "").replace(/ \+ /g, "  ")
@@ -55,7 +60,7 @@ Item {
 
     Text {
       width: parent.width
-      text: "Choose a Loopbox shortcut"
+      text: "Set up Loopbox"
       color: root.foreground
       font.family: root.fontFamily
       font.pixelSize: Style.font.display
@@ -176,6 +181,73 @@ Item {
       font.pixelSize: Style.font.body
       horizontalAlignment: Text.AlignHCenter
       wrapMode: Text.Wrap
+    }
+
+    Rectangle {
+      width: parent.width
+      height: Math.max(1, Style.space(1))
+      color: Style.normalBorderFor(root.foreground, root.accent)
+      opacity: 0.72
+    }
+
+    Column {
+      width: parent.width
+      spacing: Style.spacing.md
+
+      Rectangle {
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: Style.space(360)
+        height: Style.space(50)
+        radius: Style.cornerRadius
+        color: launcherMouse.containsMouse && launcherMouse.enabled
+          ? Style.hoverFillFor(root.foreground, root.accent)
+          : Style.normalFillFor(root.foreground, root.accent)
+        border.color: root.launcherError
+          ? Color.urgent
+          : (root.launcherInstalled ? root.accent : Style.normalBorderFor(root.foreground, root.accent))
+        border.width: Math.max(1, Style.space(1))
+
+        Text {
+          anchors.centerIn: parent
+          text: root.launcherChecking
+            ? "Checking Omarchy menu"
+            : (root.launcherInstalling
+              ? "Adding to Omarchy menu"
+              : (root.launcherInstalled
+                ? "✓  Added to Omarchy menu"
+                : "Add to Omarchy menu"))
+          color: root.launcherError
+            ? Color.urgent
+            : (root.launcherInstalled || launcherMouse.containsMouse ? root.accent : root.foreground)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.weight: Font.DemiBold
+        }
+
+        MouseArea {
+          id: launcherMouse
+          anchors.fill: parent
+          enabled: !root.launcherInstalled && !root.launcherChecking && !root.launcherInstalling
+          hoverEnabled: true
+          cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+          onClicked: root.launcherInstallRequested()
+        }
+      }
+
+      Text {
+        width: parent.width
+        text: root.launcherError
+          || (root.launcherInstalled
+            ? "Press Super+Space and search for gif or Loopbox."
+            : "Adds an optional app entry so Super+Space can find Loopbox by typing gif.")
+        textFormat: Text.PlainText
+        color: root.launcherError ? Color.urgent : root.foreground
+        opacity: root.launcherError ? 1 : 0.58
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        horizontalAlignment: Text.AlignHCenter
+        wrapMode: Text.Wrap
+      }
     }
 
     Text {

@@ -54,7 +54,7 @@ install_launcher() {
     mv -f -- "$staged" "$destination"
     trap - EXIT INT TERM HUP
     refresh_database
-    printf 'Installed Loopbox in the app launcher: %s\n' "$destination"
+    printf 'Loopbox is now available in the Omarchy menu.\n'
 }
 
 remove_launcher() {
@@ -72,9 +72,9 @@ launcher_status() {
     if [[ -f $destination && ! -L $destination ]] &&
        grep -Fx -- "$managed_marker" "$destination" >/dev/null 2>&1 &&
        grep -Fx -- "$plugin_marker" "$destination" >/dev/null 2>&1; then
-        printf '{"installed":true,"path":"%s"}\n' "$destination"
+        printf '{"installed":true}\n'
     else
-        printf '{"installed":false,"path":"%s"}\n' "$destination"
+        printf '{"installed":false}\n'
     fi
 }
 

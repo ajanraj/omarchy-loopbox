@@ -14,6 +14,7 @@ Rectangle {
   required property bool selected
   property bool favourite: false
   property bool busy: false
+  property bool paused: false
   property bool pooled: false
   property bool previewFailed: false
   property bool componentReady: false
@@ -33,6 +34,7 @@ Rectangle {
     && y + height >= view.contentY
     && y <= view.contentY + view.height
   readonly property bool previewError: previewFailed || preview.status === AnimatedImage.Error
+  readonly property int captionHeight: Math.max(Style.space(34), label.implicitHeight + Style.spacing.md * 2)
 
   function queuePreview() {
     previewSerial += 1
@@ -138,18 +140,29 @@ Rectangle {
   Behavior on border.color { ColorAnimation { duration: 100 } }
   Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
 
+  Rectangle {
+    id: imageFrame
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.top: parent.top
+    anchors.bottom: caption.top
+    anchors.margins: tile.selected ? Style.space(4) : 0
+    anchors.bottomMargin: 0
+    color: Util.alpha(Color.background, 0.92)
+    clip: true
+  }
+
   AnimatedImage {
     id: preview
-    anchors.fill: parent
-    anchors.margins: tile.selected ? Style.space(4) : 0
+    anchors.fill: imageFrame
     // Provider URLs are inputs to preview-gif only. Qt decodes local cache files.
     source: tile.localPreviewPath
     sourceSize.width: Math.min(Math.ceil(tile.width), 420)
-    sourceSize.height: Math.min(Math.ceil(tile.height), 260)
-    fillMode: Image.PreserveAspectCrop
+    sourceSize.height: Math.min(Math.ceil(imageFrame.height), 260)
+    fillMode: Image.PreserveAspectFit
     asynchronous: true
     cache: true
-    playing: !tile.pooled && tile.inViewport && status === AnimatedImage.Ready
+    playing: !tile.paused && !tile.pooled && tile.inViewport && status === AnimatedImage.Ready
     opacity: tile.busy ? 0.55 : 1
 
     Behavior on opacity { NumberAnimation { duration: 100 } }
@@ -162,7 +175,7 @@ Rectangle {
   }
 
   Rectangle {
-    anchors.centerIn: parent
+    anchors.centerIn: imageFrame
     width: Style.space(42)
     height: width
     radius: width / 2
@@ -188,7 +201,7 @@ Rectangle {
   }
 
   Rectangle {
-    anchors.fill: preview
+    anchors.fill: imageFrame
     color: Style.normalFillFor(tile.foreground, Color.accent)
     visible: preview.status !== AnimatedImage.Ready
 
@@ -221,11 +234,14 @@ Rectangle {
   }
 
   Rectangle {
+    id: caption
     anchors.left: parent.left
     anchors.right: parent.right
     anchors.bottom: parent.bottom
-    height: Math.max(Style.space(32), label.implicitHeight + Style.spacing.md * 2)
-    color: Util.alpha(Color.background, 0.82)
+    height: tile.captionHeight
+    color: tile.selected
+      ? tile.selectedBackground
+      : Style.normalFillFor(tile.foreground, Color.accent)
 
     Text {
       id: label
