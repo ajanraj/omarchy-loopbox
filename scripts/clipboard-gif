@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+
+import os
+import pathlib
+import select
+import stat
+import sys
+
+MAX_BYTES = 15 * 1024 * 1024
+
+
+def fail(message):
+    print(f"clipboard-gif: error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def validate_path(raw_path):
+    path = pathlib.Path(raw_path)
+    try:
+        info = path.lstat()
+    except OSError as error:
+        fail(f"cannot inspect GIF: {error}")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        fail("GIF must be a regular file and not a symbolic link")
+    if info.st_uid != os.getuid():
+        fail("GIF must be owned by the current user")
+    if info.st_size <= 0 or info.st_size > MAX_BYTES:
+        fail("GIF must be between 1 byte and 15 MiB")
+    try:
+        with path.open("rb") as handle:
+            if handle.read(6) not in (b"GIF87a", b"GIF89a"):
+                fail("file does not contain GIF87a or GIF89a data")
+    except OSError as error:
+        fail(f"cannot read GIF: {error}")
+    return path.resolve(strict=True)
+
+
+def claim_clipboard(path, ready_fd):
+    try:
+        import gi
+
+        gi.require_version("Gdk", "4.0")
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gdk, Gio, GLib, Gtk
+
+        Gtk.init()
+        display = Gdk.Display.get_default()
+        if display is None:
+            raise RuntimeError("could not connect to the Wayland display")
+
+        gif_bytes = path.read_bytes()
+        gif_file = Gio.File.new_for_path(str(path))
+        file_list = Gdk.FileList.new_from_list([gif_file])
+        providers = [
+            Gdk.ContentProvider.new_for_value(file_list),
+            Gdk.ContentProvider.new_for_bytes("image/gif", GLib.Bytes.new(gif_bytes)),
+        ]
+        provider = Gdk.ContentProvider.new_union(providers)
+        clipboard = display.get_clipboard()
+        if not clipboard.set_content(provider):
+            raise RuntimeError("Wayland rejected the clipboard content")
+
+        os.write(ready_fd, b"OK\n")
+        os.close(ready_fd)
+
+        loop = GLib.MainLoop()
+
+        def ownership_changed(_clipboard):
+            if not clipboard.is_local():
+                loop.quit()
+
+        clipboard.connect("changed", ownership_changed)
+        if not clipboard.is_local():
+            return
+        loop.run()
+    except Exception as error:
+        try:
+            message = str(error).replace("\n", " ")[:500]
+            os.write(ready_fd, f"ERROR {message}\n".encode("utf-8", "replace"))
+            os.close(ready_fd)
+        except OSError:
+            pass
+        raise SystemExit(1)
+
+
+def start_owner(path):
+    read_fd, write_fd = os.pipe()
+    child_pid = os.fork()
+    if child_pid == 0:
+        os.close(read_fd)
+        try:
+            os.setsid()
+        except OSError:
+            pass
+        claim_clipboard(path, write_fd)
+        os._exit(0)
+
+    os.close(write_fd)
+    ready, _, _ = select.select([read_fd], [], [], 5.0)
+    if not ready:
+        os.close(read_fd)
+        fail("clipboard owner did not start within five seconds")
+    response = os.read(read_fd, 1024).decode("utf-8", "replace").strip()
+    os.close(read_fd)
+    if response != "OK":
+        try:
+            os.waitpid(child_pid, 0)
+        except OSError:
+            pass
+        fail(response.removeprefix("ERROR ") or "clipboard owner exited before becoming ready")
+
+
+def main():
+    if len(sys.argv) != 2:
+        fail("usage: clipboard-gif <path-to-gif>")
+    start_owner(validate_path(sys.argv[1]))
+
+
+if __name__ == "__main__":
+    main()
