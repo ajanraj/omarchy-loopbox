@@ -85,6 +85,7 @@ Item {
   function open(payloadJson) {
     root.opened = true
     root.query = ""
+    searchInput.text = ""
     root.viewMode = "trending"
     root.selectedIndex = 0
     root.statusMessage = "Checking shortcut"
@@ -189,6 +190,88 @@ Item {
     root.statusError = Boolean(error) || Boolean(root.stateStorageError)
     root.requestSerial += 1
     root.startSearch(root.requestSerial, "")
+    Qt.callLater(function() {
+      searchInput.forceActiveFocus()
+      searchInput.cursorPosition = searchInput.length
+    })
+  }
+
+  function handleKey(event) {
+    var control = (event.modifiers & Qt.ControlModifier) !== 0
+    var shift = (event.modifiers & Qt.ShiftModifier) !== 0
+
+    if (root.shortcutSetup) {
+      if (root.shortcutInstalling) {
+        event.accepted = true
+        return
+      }
+      if (event.key === Qt.Key_Escape) {
+        root.dismiss()
+      } else if (event.key === Qt.Key_Left) {
+        root.chooseShortcut(-1)
+      } else if (event.key === Qt.Key_Right) {
+        root.chooseShortcut(1)
+      } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+        root.installSelectedShortcut()
+      } else if (event.key === Qt.Key_Tab) {
+        root.skipShortcutSetup()
+      } else if (!control && !shift
+                 && !(event.modifiers & (Qt.AltModifier | Qt.MetaModifier))
+                 && event.text && /^[a-zA-Z]$/.test(event.text)) {
+        root.chooseShortcutLetter(event.text)
+      }
+      event.accepted = true
+      return
+    }
+
+    if (event.key === Qt.Key_Escape) {
+      if (root.query) root.setQuery("")
+      else root.dismiss()
+      event.accepted = true
+    } else if (control && shift && event.key === Qt.Key_F) {
+      root.toggleSelectedFavorite()
+      event.accepted = true
+    } else if (control && !shift && event.key === Qt.Key_1) {
+      root.showTrending()
+      event.accepted = true
+    } else if (control && !shift && event.key === Qt.Key_2) {
+      root.showFavorites()
+      event.accepted = true
+    } else if (control && !shift && event.key === Qt.Key_R) {
+      root.retrySearch()
+      event.accepted = true
+    } else if (!searchInput.activeFocus && Util.editsFilter(event, root.query)) {
+      root.setQuery(Util.editedFilter(event, root.query))
+      event.accepted = true
+    } else if (event.key === Qt.Key_Left) {
+      root.navigate("left")
+      event.accepted = true
+    } else if (event.key === Qt.Key_Right) {
+      root.navigate("right")
+      event.accepted = true
+    } else if (event.key === Qt.Key_Up) {
+      root.navigate("up")
+      event.accepted = true
+    } else if (event.key === Qt.Key_Down) {
+      root.navigate("down")
+      event.accepted = true
+    } else if (event.key === Qt.Key_Home || event.key === Qt.Key_PageUp) {
+      root.navigate("home")
+      event.accepted = true
+    } else if (event.key === Qt.Key_End || event.key === Qt.Key_PageDown) {
+      root.navigate("end")
+      event.accepted = true
+    } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+      if (shift) root.copyLink(root.selectedIndex)
+      else root.copyGif(root.selectedIndex)
+      event.accepted = true
+    } else if (!searchInput.activeFocus && !control
+               && !(event.modifiers & (Qt.AltModifier | Qt.MetaModifier))
+               && event.text && event.text.length === 1
+               && event.text.charCodeAt(0) >= 32 && event.text.charCodeAt(0) !== 127) {
+      root.setQuery(root.query + event.text)
+      event.accepted = true
+    }
   }
 
   // Called by the shell host before this unload-on-close plugin is destroyed.
@@ -396,7 +479,9 @@ Item {
   }
 
   function setQuery(nextQuery) {
-    root.query = String(nextQuery || "").slice(0, 120)
+    var bounded = String(nextQuery || "").slice(0, 120)
+    root.query = bounded
+    if (searchInput.text !== bounded) searchInput.text = bounded
     root.viewMode = root.query ? "search" : "trending"
     root.selectedIndex = resultModel.count > 0 ? 0 : -1
     root.nextPosition = ""
@@ -408,6 +493,7 @@ Item {
 
   function showTrending() {
     root.query = ""
+    searchInput.text = ""
     root.viewMode = "trending"
     root.nextPosition = ""
     root.loadingMore = false
@@ -420,6 +506,7 @@ Item {
 
   function showFavorites() {
     root.query = ""
+    searchInput.text = ""
     root.viewMode = "favorites"
     root.nextPosition = ""
     root.loadingMore = false
@@ -845,82 +932,7 @@ Item {
         z: 2
 
         Keys.priority: Keys.BeforeItem
-        Keys.onPressed: function(event) {
-          var control = (event.modifiers & Qt.ControlModifier) !== 0
-          var shift = (event.modifiers & Qt.ShiftModifier) !== 0
-
-          if (root.shortcutSetup) {
-            if (root.shortcutInstalling) {
-              event.accepted = true
-              return
-            }
-            if (event.key === Qt.Key_Escape) {
-              root.dismiss()
-            } else if (event.key === Qt.Key_Left) {
-              root.chooseShortcut(-1)
-            } else if (event.key === Qt.Key_Right) {
-              root.chooseShortcut(1)
-            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-              root.installSelectedShortcut()
-            } else if (event.key === Qt.Key_Tab) {
-              root.skipShortcutSetup()
-            } else if (!control && !shift
-                       && !(event.modifiers & (Qt.AltModifier | Qt.MetaModifier))
-                       && event.text && /^[a-zA-Z]$/.test(event.text)) {
-              root.chooseShortcutLetter(event.text)
-            }
-            event.accepted = true
-            return
-          }
-
-          if (event.key === Qt.Key_Escape) {
-            if (root.query) root.setQuery("")
-            else root.dismiss()
-            event.accepted = true
-          } else if (control && shift && event.key === Qt.Key_F) {
-            root.toggleSelectedFavorite()
-            event.accepted = true
-          } else if (control && !shift && event.key === Qt.Key_1) {
-            root.showTrending()
-            event.accepted = true
-          } else if (control && !shift && event.key === Qt.Key_2) {
-            root.showFavorites()
-            event.accepted = true
-          } else if (control && !shift && event.key === Qt.Key_R) {
-            root.retrySearch()
-            event.accepted = true
-          } else if (Util.editsFilter(event, root.query)) {
-            root.setQuery(Util.editedFilter(event, root.query))
-            event.accepted = true
-          } else if (event.key === Qt.Key_Left) {
-            root.navigate("left")
-            event.accepted = true
-          } else if (event.key === Qt.Key_Right) {
-            root.navigate("right")
-            event.accepted = true
-          } else if (event.key === Qt.Key_Up) {
-            root.navigate("up")
-            event.accepted = true
-          } else if (event.key === Qt.Key_Down) {
-            root.navigate("down")
-            event.accepted = true
-          } else if (event.key === Qt.Key_Home || event.key === Qt.Key_PageUp) {
-            root.navigate("home")
-            event.accepted = true
-          } else if (event.key === Qt.Key_End || event.key === Qt.Key_PageDown) {
-            root.navigate("end")
-            event.accepted = true
-          } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            if (shift) root.copyLink(root.selectedIndex)
-            else root.copyGif(root.selectedIndex)
-            event.accepted = true
-          } else if (!control && !(event.modifiers & (Qt.AltModifier | Qt.MetaModifier))
-                     && event.text && event.text.length === 1
-                     && event.text.charCodeAt(0) >= 32 && event.text.charCodeAt(0) !== 127) {
-            root.setQuery(root.query + event.text)
-            event.accepted = true
-          }
-        }
+        Keys.onPressed: function(event) { root.handleKey(event) }
       }
 
       Column {
@@ -963,37 +975,66 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
-            height: Math.max(Style.space(42), searchText.implicitHeight + Style.spacing.lg * 2)
+            height: Math.max(Style.space(42), searchInput.implicitHeight + Style.spacing.lg * 2)
             radius: root.cornerRadius
             color: Style.normalFillFor(root.foreground, Color.accent)
-            border.color: root.query ? Color.accent : Style.normalBorderFor(root.foreground, Color.accent)
-            border.width: root.query ? Math.max(1, Style.space(1)) : Style.normalBorderWidth
+            border.color: searchInput.activeFocus || root.query
+              ? Color.accent : Style.normalBorderFor(root.foreground, Color.accent)
+            border.width: searchInput.activeFocus || root.query
+              ? Math.max(1, Style.space(1)) : Style.normalBorderWidth
+
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.IBeamCursor
+              onClicked: searchInput.forceActiveFocus()
+            }
 
             Text {
               anchors.left: parent.left
               anchors.leftMargin: Style.spacing.xl
               anchors.verticalCenter: parent.verticalCenter
               text: ""
-              color: root.query ? Color.accent : root.foreground
-              opacity: root.query ? 1 : 0.55
+              color: searchInput.activeFocus || root.query ? Color.accent : root.foreground
+              opacity: searchInput.activeFocus || root.query ? 1 : 0.55
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
             }
 
-            Text {
-              id: searchText
+            TextInput {
+              id: searchInput
               anchors.left: parent.left
               anchors.leftMargin: Style.space(38)
               anchors.right: parent.right
               anchors.rightMargin: Style.spacing.xl
               anchors.verticalCenter: parent.verticalCenter
-              text: root.query || (root.viewMode === "favorites" ? "Start typing to search GIFs" : "Search reaction GIFs")
-              textFormat: Text.PlainText
+              text: ""
               color: root.foreground
-              opacity: root.query ? 1 : 0.5
+              selectionColor: Util.alpha(Color.accent, 0.45)
+              selectedTextColor: root.selectedText
               font.family: root.fontFamily
               font.pixelSize: Style.font.heading
-              elide: Text.ElideRight
+              maximumLength: 120
+              clip: true
+              selectByMouse: true
+              activeFocusOnPress: true
+              verticalAlignment: TextInput.AlignVCenter
+              cursorVisible: activeFocus && root.opened && !root.shortcutSetup
+              Keys.priority: Keys.BeforeItem
+              Keys.onPressed: function(event) { root.handleKey(event) }
+              onTextEdited: root.setQuery(text)
+              onActiveFocusChanged: if (activeFocus) cursorPosition = length
+
+              Text {
+                anchors.fill: parent
+                visible: searchInput.text.length === 0
+                text: root.viewMode === "favorites" ? "Start typing to search GIFs" : "Search reaction GIFs"
+                textFormat: Text.PlainText
+                color: root.foreground
+                opacity: 0.5
+                font: searchInput.font
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+              }
             }
           }
         }
