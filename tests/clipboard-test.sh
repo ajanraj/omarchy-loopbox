@@ -13,8 +13,7 @@ curl_count_file="$test_root/curl-count"
 curl_url_log="$test_root/curl-urls"
 curl_args_log="$test_root/curl-args"
 clipboard_log="$test_root/clipboard-log"
-clipboard_capture="$test_root/clipboard-capture.png"
-ffmpeg_count_file="$test_root/ffmpeg-count"
+clipboard_capture="$test_root/clipboard-capture.gif"
 timeout_args_log="$test_root/timeout-args"
 
 cleanup() {
@@ -70,7 +69,7 @@ cat >"$helper" <<'HELPER'
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$#" -ne 3 || "$1" != '--copy-only' || "$2" != 'image/png' ]]; then
+if [[ "$#" -ne 1 || "$1" != *.gif ]]; then
     printf 'unexpected clipboard arguments\n' >&2
     exit 64
 fi
@@ -80,34 +79,14 @@ if [[ -n "${FAKE_LOCK_DIR:-}" ]] && ! flock -n "$FAKE_LOCK_DIR" true; then
     exit 65
 fi
 
-printf '%s|%s|%s\n' "$1" "$2" "$3" >>"$FAKE_CLIPBOARD_LOG"
+printf '%s\n' "$1" >>"$FAKE_CLIPBOARD_LOG"
 if [[ "${FAKE_CLIPBOARD_MODE:-ok}" == 'fail' ]]; then
     printf 'simulated clipboard failure\n' >&2
     exit 1
 fi
-cp -- "$3" "$FAKE_CLIPBOARD_CAPTURE"
+cp -- "$1" "$FAKE_CLIPBOARD_CAPTURE"
 HELPER
 chmod +x -- "$helper"
-
-cat >"$fake_bin/ffmpeg" <<'FFMPEG'
-#!/usr/bin/env bash
-set -euo pipefail
-
-output=${!#}
-count=0
-if [[ -f "$FAKE_FFMPEG_COUNT_FILE" ]]; then
-    count=$(<"$FAKE_FFMPEG_COUNT_FILE")
-fi
-printf '%s\n' "$((count + 1))" >"$FAKE_FFMPEG_COUNT_FILE"
-
-if [[ "${FAKE_FFMPEG_MODE:-ok}" == 'fail' ]]; then
-    printf 'simulated conversion failure\n' >&2
-    exit 1
-fi
-
-printf '\211PNG\r\n\032\n\000\000\000\010acTLfake animated payload\n' >"$output"
-FFMPEG
-chmod +x -- "$fake_bin/ffmpeg"
 
 cat >"$fake_bin/curl" <<'CURL'
 #!/usr/bin/env bash
@@ -221,7 +200,6 @@ export FAKE_CLIPBOARD_CAPTURE="$clipboard_capture"
 export FAKE_CURL_COUNT_FILE="$curl_count_file"
 export FAKE_CURL_URL_LOG="$curl_url_log"
 export FAKE_CURL_ARGS_LOG="$curl_args_log"
-export FAKE_FFMPEG_COUNT_FILE="$ffmpeg_count_file"
 export FAKE_LOCK_DIR="$cache_dir"
 export FAKE_TIMEOUT_ARGS_LOG="$timeout_args_log"
 
@@ -234,11 +212,9 @@ success_stderr="$test_root/success.stderr"
 test_url='https://static.klipy.com/images/-remote-url.gif'
 FAKE_CURL_MODE=gif "$copy_gif" "$test_url" klipy first >"$success_stdout" 2>"$success_stderr"
 expected_path="$cache_dir/klipy-first.gif"
-expected_clipboard_path="$cache_dir/klipy-first.png"
 assert_eq "$expected_path" "$(<"$success_stdout")" 'success must print only the cached path'
-cmp -- "$expected_clipboard_path" "$clipboard_capture" >/dev/null || fail 'clipboard helper must receive the converted APNG bytes'
-assert_file_contains '--copy-only|image/png|' "$clipboard_log" 'clipboard helper must receive copy-only image/png arguments'
-assert_file_contains "$expected_clipboard_path" "$clipboard_log" 'clipboard helper must receive the cached APNG path'
+cmp -- "$expected_path" "$clipboard_capture" >/dev/null || fail 'clipboard helper must receive the original GIF bytes'
+assert_file_contains "$expected_path" "$clipboard_log" 'clipboard helper must receive the cached GIF path'
 assert_eq "$test_url" "$(<"$curl_url_log")" 'remote URL must be passed as one --url value'
 assert_eq '--disable' "$(head -n 1 -- "$curl_args_log")" 'curl config must be disabled before any other argument'
 assert_file_contains '--resolve' "$curl_args_log" 'download must pin the approved DNS result'
@@ -254,17 +230,9 @@ assert_eq 'lock target must remain unchanged' "$(<"$lock_target")" 'lock symlink
 [[ -L "$cache_dir/.copy-gif.lock" ]] || fail 'lock symlink must not be replaced'
 
 curl_count_after_download=$(<"$curl_count_file")
-ffmpeg_count_after_conversion=$(<"$ffmpeg_count_file")
 FAKE_CURL_MODE=http-fail FAKE_RESOLVE_MODE=fail "$copy_gif" "$test_url" klipy first >"$test_root/cache-hit.stdout" 2>"$test_root/cache-hit.stderr"
 assert_eq "$expected_path" "$(<"$test_root/cache-hit.stdout")" 'cache hit must still copy and print the cached path'
 assert_eq "$curl_count_after_download" "$(<"$curl_count_file")" 'cache hit must not download again'
-assert_eq "$ffmpeg_count_after_conversion" "$(<"$ffmpeg_count_file")" 'cache hit must not convert the GIF again'
-
-printf 'not a png\n' >"$expected_clipboard_path"
-ffmpeg_count_before_apng_repair=$(<"$ffmpeg_count_file")
-FAKE_CURL_MODE=http-fail "$copy_gif" "$test_url" klipy first >"$test_root/apng-repair.stdout" 2>"$test_root/apng-repair.stderr"
-assert_eq "$((ffmpeg_count_before_apng_repair + 1))" "$(<"$ffmpeg_count_file")" 'invalid APNG cache hit must be converted again'
-assert_file_contains 'acTL' "$expected_clipboard_path" 'invalid APNG cache hit must be replaced with an animation'
 
 fallback_home="$test_root/home"
 mkdir -p -- "$fallback_home"
@@ -278,7 +246,6 @@ assert_file_not_contains 'klipy-bad.gif' "$clipboard_log" 'invalid GIF magic mus
 assert_file_contains 'GIF87a or GIF89a' "$test_root/bad.stderr" 'invalid GIF error must explain the accepted signatures'
 
 count_before_unsafe=$(<"$curl_count_file")
-ffmpeg_before_unsafe=$(<"$ffmpeg_count_file")
 FAKE_CURL_MODE=gif run_failure "$test_root/unsafe-provider.stdout" "$test_root/unsafe-provider.stderr" "$test_url" '../klipy' safe
 (( RUN_STATUS != 0 )) || fail 'unsafe provider segment must fail'
 assert_eq '' "$(<"$test_root/unsafe-provider.stdout")" 'unsafe provider must not report success'
@@ -286,17 +253,13 @@ FAKE_CURL_MODE=gif run_failure "$test_root/unsafe-id.stdout" "$test_root/unsafe-
 (( RUN_STATUS != 0 )) || fail 'unsafe id segment must fail'
 assert_eq '' "$(<"$test_root/unsafe-id.stdout")" 'unsafe id must not report success'
 assert_eq "$count_before_unsafe" "$(<"$curl_count_file")" 'unsafe path segments must be rejected before downloading'
-assert_eq "$ffmpeg_before_unsafe" "$(<"$ffmpeg_count_file")" 'unsafe path segments must be rejected before conversion'
 assert_file_contains 'unsupported provider' "$test_root/unsafe-provider.stderr" 'unsupported provider error must explain the accepted provider'
 
 printf 'GIF89a cached payload\n' >"$cache_dir/klipy-poisoned.gif"
-printf '\211PNG\r\n\032\n\000\000\000\010acTLcached payload\n' >"$cache_dir/klipy-poisoned.png"
 count_before_unsafe_cache=$(<"$curl_count_file")
-ffmpeg_before_unsafe_cache=$(<"$ffmpeg_count_file")
 run_failure "$test_root/unsafe-cache.stdout" "$test_root/unsafe-cache.stderr" 'https://evil.test/payload.gif' klipy poisoned
 (( RUN_STATUS != 0 )) || fail 'unsafe URL must fail even when the requested ID is cached'
 assert_eq "$count_before_unsafe_cache" "$(<"$curl_count_file")" 'unsafe cache hit must not run curl'
-assert_eq "$ffmpeg_before_unsafe_cache" "$(<"$ffmpeg_count_file")" 'unsafe cache hit must not run ffmpeg'
 assert_file_contains 'unsafe KLIPY media URL' "$test_root/unsafe-cache.stderr" 'unsafe cache hit must report URL validation failure'
 
 FAKE_CURL_MODE=http-fail run_failure "$test_root/http-fail.stdout" "$test_root/http-fail.stderr" "$test_url" klipy network-failure
@@ -310,12 +273,6 @@ FAKE_CURL_MODE=redirect run_failure "$test_root/redirect.stdout" "$test_root/red
 assert_eq '' "$(<"$test_root/redirect.stdout")" 'HTTP redirect must not report success'
 assert_file_contains 'HTTP 302' "$test_root/redirect.stderr" 'HTTP redirect error must report the rejected status'
 [[ ! -e "$cache_dir/klipy-redirect.gif" ]] || fail 'HTTP redirect body must not be cached'
-
-FAKE_CURL_MODE=gif FAKE_FFMPEG_MODE=fail run_failure "$test_root/conversion-fail.stdout" "$test_root/conversion-fail.stderr" "$test_url" klipy conversion-failure
-(( RUN_STATUS != 0 )) || fail 'APNG conversion failure must fail'
-assert_eq '' "$(<"$test_root/conversion-fail.stdout")" 'APNG conversion failure must not report success'
-assert_file_not_contains 'klipy-conversion-failure.png' "$clipboard_log" 'failed APNG conversion must not reach the clipboard helper'
-assert_file_contains 'conversion failed or timed out' "$test_root/conversion-fail.stderr" 'APNG conversion error must explain recovery'
 
 FAKE_CURL_MODE=oversize run_failure "$test_root/oversize.stdout" "$test_root/oversize.stderr" "$test_url" klipy too-large
 (( RUN_STATUS != 0 )) || fail 'oversize download must fail'
@@ -342,9 +299,7 @@ assert_file_contains 'clipboard copy failed' "$test_root/clipboard-fail.stderr" 
 
 for index in $(seq -w 1 21); do
     printf 'GIF89a old payload %s\n' "$index" >"$cache_dir/klipy-old-$index.gif"
-    printf '\211PNG\r\n\032\n\000\000\000\010acTLold payload %s\n' "$index" >"$cache_dir/klipy-old-$index.png"
     touch -t "2000010100${index}" "$cache_dir/klipy-old-$index.gif"
-    touch -t "2000010100${index}" "$cache_dir/klipy-old-$index.png"
 done
 for index in $(seq -w 1 11); do
     large_file="$cache_dir/klipy-large-$index.gif"
@@ -355,11 +310,10 @@ FAKE_CURL_MODE=gif FAKE_CLIPBOARD_MODE=ok "$copy_gif" "$test_url" klipy prune >"
 gif_count=$(find "$cache_dir" -maxdepth 1 -type f -name '*.gif' -print | wc -l)
 (( gif_count <= 20 )) || fail 'pruning must keep no more than 20 cached GIFs'
 [[ ! -e "$cache_dir/klipy-old-01.gif" ]] || fail 'pruning must remove the oldest cached GIF first'
-[[ ! -e "$cache_dir/klipy-old-01.png" ]] || fail 'pruning must remove the matching cached APNG'
 [[ -e "$cache_dir/klipy-prune.gif" ]] || fail 'pruning must retain the current target'
 large_count=$(find "$cache_dir" -maxdepth 1 -type f -name 'klipy-large-*.gif' -print | wc -l)
 (( large_count > 0 )) || fail 'pruning should use the 150 MiB cache budget, not the 15 MiB transfer budget'
-total_bytes=$(find "$cache_dir" -maxdepth 1 -type f \( -name '*.gif' -o -name '*.png' \) -printf '%s\n' | awk '{ total += $1 } END { print total + 0 }')
+total_bytes=$(find "$cache_dir" -maxdepth 1 -type f -name '*.gif' -printf '%s\n' | awk '{ total += $1 } END { print total + 0 }')
 (( total_bytes <= 157286400 )) || fail 'pruning must keep the cache at or below 150 MiB'
 
 printf 'PASS: clipboard helper contract\n'
