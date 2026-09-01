@@ -94,6 +94,22 @@ grep -F 'var page = Klipy.parsePage(searchStdout.text)' "$loopbox" >/dev/null ||
     printf 'FAIL: the search process must retain the validated provider cursor\n' >&2
     exit 1
 }
+grep -F 'id: searchInput' "$loopbox" >/dev/null || {
+    printf 'FAIL: the search box must be a real text input\n' >&2
+    exit 1
+}
+grep -F 'searchInput.forceActiveFocus()' "$loopbox" >/dev/null || {
+    printf 'FAIL: the search input must receive focus when the picker opens\n' >&2
+    exit 1
+}
+grep -F 'cursorVisible: activeFocus && root.opened && !root.shortcutSetup' "$loopbox" >/dev/null || {
+    printf 'FAIL: the focused search input must expose its blinking cursor\n' >&2
+    exit 1
+}
+grep -F 'onTextEdited: root.setQuery(text)' "$loopbox" >/dev/null || {
+    printf 'FAIL: native text input edits must drive GIF filtering\n' >&2
+    exit 1
+}
 grep -F 'textFormat: Text.PlainText' "$status_bar" >/dev/null || {
     printf 'FAIL: search status text must render as plain text\n' >&2
     exit 1

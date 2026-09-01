@@ -57,7 +57,7 @@ omarchy bar put io.github.ajanraj.loopbox --section right
 
 ## Use
 
-Open Loopbox and start typing. An empty query shows trending GIFs.
+Open Loopbox and start typing or paste into the already-focused search field. Its blinking cursor makes the active filter explicit; an empty query shows trending GIFs.
 
 | Key | Action |
 |---|---|
