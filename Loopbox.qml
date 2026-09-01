@@ -924,8 +924,6 @@ Item {
               height: resultGrid.cellHeight - Style.spacing.sm
               selected: index === root.selectedIndex
               previewScript: root.previewScript
-              provider: model.provider
-              resultId: model.resultId
               busy: root.copying && index === root.copyingIndex
               favourite: {
                 var row = root.resultAt(index)
