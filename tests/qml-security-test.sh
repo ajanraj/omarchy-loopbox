@@ -5,6 +5,7 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 gif_tile="$script_dir/../components/GifTile.qml"
 loopbox="$script_dir/../Loopbox.qml"
+status_bar="$script_dir/../components/StatusBar.qml"
 
 if ! awk '
     /id: label/ { in_label = 1 }
@@ -63,6 +64,38 @@ grep -F 'required property string provider' "$gif_tile" >/dev/null || {
 }
 grep -F 'required property string resultId' "$gif_tile" >/dev/null || {
     printf 'FAIL: preview delegates must inject the resultId ListModel role\n' >&2
+    exit 1
+}
+grep -F 'readonly property int pageSize: 24' "$loopbox" >/dev/null || {
+    printf 'FAIL: provider pagination must retain a bounded page size\n' >&2
+    exit 1
+}
+grep -F 'readonly property int maxResults: 96' "$loopbox" >/dev/null || {
+    printf 'FAIL: the long-lived shell must cap retained GIF results\n' >&2
+    exit 1
+}
+grep -F 'interactive: contentHeight > height' "$loopbox" >/dev/null || {
+    printf 'FAIL: the GIF grid must allow scrolling when results overflow\n' >&2
+    exit 1
+}
+grep -F 'root.loadNextPage()' "$loopbox" >/dev/null || {
+    printf 'FAIL: the GIF grid must request another bounded page near its end\n' >&2
+    exit 1
+}
+grep -F 'scrollGestureEnabled: false' "$gif_tile" >/dev/null || {
+    printf 'FAIL: GIF tiles must pass touchpad scrolling through to the grid\n' >&2
+    exit 1
+}
+grep -F 'wheel.accepted = false' "$gif_tile" >/dev/null || {
+    printf 'FAIL: GIF tiles must pass mouse-wheel scrolling through to the grid\n' >&2
+    exit 1
+}
+grep -F 'var page = Klipy.parsePage(searchStdout.text)' "$loopbox" >/dev/null || {
+    printf 'FAIL: the search process must retain the validated provider cursor\n' >&2
+    exit 1
+}
+grep -F 'textFormat: Text.PlainText' "$status_bar" >/dev/null || {
+    printf 'FAIL: search status text must render as plain text\n' >&2
     exit 1
 }
 

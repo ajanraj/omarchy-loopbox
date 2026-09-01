@@ -259,9 +259,11 @@ Rectangle {
   MouseArea {
     anchors.fill: parent
     hoverEnabled: true
+    scrollGestureEnabled: false
     cursorShape: Qt.PointingHandCursor
     onPositionChanged: tile.hovered(tile.index)
     onClicked: tile.activated(tile.index)
+    onWheel: function(wheel) { wheel.accepted = false }
   }
 
   GridView.onPooled: {

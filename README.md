@@ -9,7 +9,7 @@ Loopbox is a fast keyboard-first Omarchy GIF picker and reaction GIF search plug
 - Searches reaction GIFs through KLIPY with no API key or setup
 - Shows trending GIFs as soon as the overlay opens
 - Adds a Loopbox image icon to the Omarchy bar
-- Keeps eight animated results fast and keyboard-navigable
+- Loads scrollable results in 24-item pages, capped at 96 per search
 - Copies GIFs as animated PNG clipboard data with Enter for reliable Wayland paste support
 - Copies the direct GIF URL with Shift+Enter when an app does not accept image data
 - Saves up to 50 favourites and 20 recent selections locally
@@ -62,6 +62,7 @@ Open Loopbox and start typing. An empty query shows trending GIFs.
 | Key | Action |
 |---|---|
 | Arrow keys | Move through the grid |
+| Mouse wheel / touchpad | Scroll through results and load the next page near the end |
 | Home / End | Select the first / last result |
 | Enter | Copy the selected GIF as animated `image/png` |
 | Shift+Enter | Copy the selected GIF URL |
@@ -93,7 +94,7 @@ Loopbox stores only:
 - The confirmed shortcut in `~/.config/hypr/loopbox.lua`, loaded by a marked block in `~/.config/hypr/bindings.lua`
 - A shortcut-declined marker at `$XDG_STATE_HOME/loopbox/shortcut-setup-skipped`
 
-The copy cache is bounded to 20 GIF/APNG pairs and 150 MiB. The preview cache is bounded to 16 GIFs and 120 MiB. Search responses are not persisted.
+The copy cache is bounded to 20 GIF/APNG pairs and 150 MiB. The preview cache is bounded to 16 GIFs and 120 MiB. Search responses are limited to 24 results per page and 96 retained results per query; they are not persisted.
 
 ## Troubleshooting
 

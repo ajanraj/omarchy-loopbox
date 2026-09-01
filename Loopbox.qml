@@ -2,6 +2,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import QtQuick
+import QtQuick.Controls
 import qs.Commons
 import qs.Ui
 import "components"
@@ -20,6 +21,8 @@ Item {
   property string viewMode: "trending"
   property int selectedIndex: 0
   property bool loading: false
+  property bool loadingMore: false
+  property string nextPosition: ""
   property bool copying: false
   property int copyingIndex: -1
   property string statusMessage: ""
@@ -61,6 +64,9 @@ Item {
   readonly property string shortcutScript: pluginDirectory + "/scripts/shortcut"
   readonly property string stateScript: pluginDirectory ? pluginDirectory + "/scripts/state" : ""
   readonly property string selectedShortcut: customShortcut || shortcutCandidates[shortcutCandidateIndex] || shortcutCandidates[0]
+  readonly property int pageSize: 24
+  readonly property int maxResults: 96
+  readonly property int columnCount: 4
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -83,6 +89,9 @@ Item {
     root.selectedIndex = 0
     root.statusMessage = "Checking shortcut"
     root.statusError = false
+    root.loading = false
+    root.loadingMore = false
+    root.nextPosition = ""
     resultModel.clear()
     root.requestSerial += 1
     root.forceShortcutSetup = false
@@ -195,6 +204,8 @@ Item {
     if (linkProc.running) linkProc.running = false
     if (shortcutProc.running) shortcutProc.running = false
     root.loading = false
+    root.loadingMore = false
+    root.nextPosition = ""
     root.copying = false
     root.copyingIndex = -1
     root.shortcutSetup = false
@@ -231,33 +242,63 @@ Item {
     return root.resultFromRow(resultModel.get(index))
   }
 
+  function appendResult(row) {
+    resultModel.append({
+      provider: String(row.provider || ""),
+      resultId: String(row.id || ""),
+      title: String(row.title || "Untitled GIF"),
+      pageUrl: String(row.pageUrl || ""),
+      shareUrl: String(row.shareUrl || row.originalUrl || ""),
+      originalUrl: String(row.originalUrl || ""),
+      previewUrl: String(row.previewUrl || ""),
+      mediaWidth: Number(row.width || 0),
+      mediaHeight: Number(row.height || 0),
+      bytes: Number(row.bytes || 0)
+    })
+  }
+
   function replaceResults(rows) {
     resultModel.clear()
-    var count = Math.min(8, Array.isArray(rows) ? rows.length : 0)
-    for (var i = 0; i < count; i++) {
-      var row = rows[i]
-      resultModel.append({
-        provider: String(row.provider || ""),
-        resultId: String(row.id || ""),
-        title: String(row.title || "Untitled GIF"),
-        pageUrl: String(row.pageUrl || ""),
-        shareUrl: String(row.shareUrl || row.originalUrl || ""),
-        originalUrl: String(row.originalUrl || ""),
-        previewUrl: String(row.previewUrl || ""),
-        mediaWidth: Number(row.width || 0),
-        mediaHeight: Number(row.height || 0),
-        bytes: Number(row.bytes || 0)
-      })
-    }
+    var count = Math.min(root.maxResults, Array.isArray(rows) ? rows.length : 0)
+    for (var i = 0; i < count; i++) root.appendResult(rows[i])
     root.selectedIndex = resultModel.count > 0 ? 0 : -1
     Qt.callLater(function() {
       if (resultModel.count > 0) resultGrid.positionViewAtIndex(0, GridView.Contain)
     })
   }
 
+  function appendResults(rows) {
+    var incoming = Array.isArray(rows) ? rows : []
+    var seen = {}
+    for (var i = 0; i < resultModel.count; i++) {
+      var existing = resultModel.get(i)
+      seen[String(existing.provider || "") + ":" + String(existing.resultId || "")] = true
+    }
+
+    var added = 0
+    for (var j = 0; j < incoming.length && resultModel.count < root.maxResults; j++) {
+      var row = incoming[j]
+      var key = String(row.provider || "") + ":" + String(row.id || "")
+      if (!row.id || seen[key]) continue
+      seen[key] = true
+      root.appendResult(row)
+      added += 1
+    }
+    return added
+  }
+
+  function resultsStatus() {
+    var more = root.nextPosition ? " · scroll for more" : ""
+    if (root.query)
+      return resultModel.count + (resultModel.count === 1 ? " result for " : " results for ") + root.query + more
+    return "Trending GIFs" + more
+  }
+
   function loadFavorites() {
     root.replaceResults(root.state.favorites || [])
     root.loading = false
+    root.loadingMore = false
+    root.nextPosition = ""
     root.statusError = Boolean(root.stateStorageError)
     root.statusMessage = root.stateStorageError || (resultModel.count > 0
       ? resultModel.count + (resultModel.count === 1 ? " favourite" : " favourites")
@@ -355,9 +396,11 @@ Item {
   }
 
   function setQuery(nextQuery) {
-    root.query = String(nextQuery || "")
+    root.query = String(nextQuery || "").slice(0, 120)
     root.viewMode = root.query ? "search" : "trending"
     root.selectedIndex = resultModel.count > 0 ? 0 : -1
+    root.nextPosition = ""
+    root.loadingMore = false
     root.statusError = false
     root.statusMessage = root.query ? "Searching for " + root.query : "Loading trending GIFs"
     root.scheduleSearch()
@@ -366,6 +409,8 @@ Item {
   function showTrending() {
     root.query = ""
     root.viewMode = "trending"
+    root.nextPosition = ""
+    root.loadingMore = false
     root.statusError = false
     root.statusMessage = "Loading trending GIFs"
     root.requestSerial += 1
@@ -376,6 +421,8 @@ Item {
   function showFavorites() {
     root.query = ""
     root.viewMode = "favorites"
+    root.nextPosition = ""
+    root.loadingMore = false
     root.requestSerial += 1
     searchDebounce.stop()
     searchProc.queuedSerial = 0
@@ -388,29 +435,50 @@ Item {
     if (root.viewMode === "favorites") return
     root.statusError = false
     root.statusMessage = root.query ? "Retrying search" : "Retrying trending GIFs"
+    root.nextPosition = ""
+    root.loadingMore = false
     root.requestSerial += 1
     searchDebounce.stop()
     root.startSearch(root.requestSerial, root.query)
   }
 
-  function startSearch(serial, searchQuery) {
+  function startSearch(serial, searchQuery, cursor, append) {
     if (!root.opened || root.viewMode === "favorites") return
+    var appendPage = Boolean(append)
+    var position = String(cursor || "")
+    if (appendPage && (!position || resultModel.count >= root.maxResults)) return
     if (searchProc.running) {
       searchProc.queuedSerial = serial
       searchProc.queuedQuery = searchQuery
+      searchProc.queuedCursor = position
+      searchProc.queuedAppend = appendPage
       searchProc.expectedStop = true
       searchProc.running = false
-      root.loading = true
+      if (appendPage) root.loadingMore = true
+      else root.loading = true
       return
     }
 
     searchProc.activeSerial = serial
+    searchProc.activeCursor = position
+    searchProc.activeAppend = appendPage
     searchProc.queuedSerial = 0
     searchProc.queuedQuery = ""
+    searchProc.queuedCursor = ""
+    searchProc.queuedAppend = false
     searchProc.expectedStop = false
-    searchProc.command = Klipy.searchCommand(searchQuery, 8)
+    searchProc.command = Klipy.searchCommand(searchQuery, root.pageSize, position)
     searchProc.running = true
-    root.loading = true
+    if (appendPage) root.loadingMore = true
+    else root.loading = true
+  }
+
+  function loadNextPage() {
+    if (!root.opened || root.viewMode === "favorites" || root.loading || root.loadingMore
+        || searchProc.running || !root.nextPosition || resultModel.count >= root.maxResults) return
+    root.statusError = false
+    root.statusMessage = "Loading more GIFs"
+    root.startSearch(root.requestSerial, root.query, root.nextPosition, true)
   }
 
   function providerFailure(message, exitCode) {
@@ -428,9 +496,11 @@ Item {
 
   function navigate(direction) {
     if (resultModel.count === 0) return
-    root.selectedIndex = LoopboxModel.navigate(root.selectedIndex, direction, resultModel.count, 4)
+    root.selectedIndex = LoopboxModel.navigate(root.selectedIndex, direction, resultModel.count, root.columnCount)
     if (root.selectedIndex >= 0)
       resultGrid.positionViewAtIndex(root.selectedIndex, GridView.Contain)
+    if (root.selectedIndex >= resultModel.count - root.columnCount * 2)
+      root.loadNextPage()
   }
 
   function copyGif(index) {
@@ -479,7 +549,7 @@ Item {
     id: searchDebounce
     interval: 220
     repeat: false
-    onTriggered: root.startSearch(root.requestSerial, root.query)
+    onTriggered: root.startSearch(root.requestSerial, root.query, "", false)
   }
 
   Timer {
@@ -545,8 +615,12 @@ Item {
   Process {
     id: searchProc
     property int activeSerial: 0
+    property string activeCursor: ""
+    property bool activeAppend: false
     property int queuedSerial: 0
     property string queuedQuery: ""
+    property string queuedCursor: ""
+    property bool queuedAppend: false
     property bool expectedStop: false
 
     stdout: StdioCollector { id: searchStdout; waitForEnd: true }
@@ -554,42 +628,62 @@ Item {
 
     onExited: function(exitCode, exitStatus) {
       var finishedSerial = activeSerial
+      var finishedCursor = activeCursor
+      var finishedAppend = activeAppend
       var nextSerial = queuedSerial
       var nextQuery = queuedQuery
+      var nextCursor = queuedCursor
+      var nextAppend = queuedAppend
       activeSerial = 0
+      activeCursor = ""
+      activeAppend = false
       queuedSerial = 0
       queuedQuery = ""
+      queuedCursor = ""
+      queuedAppend = false
 
       if (nextSerial > 0 && nextSerial === root.requestSerial && root.opened && root.viewMode !== "favorites") {
-        Qt.callLater(function() { root.startSearch(nextSerial, nextQuery) })
+        Qt.callLater(function() { root.startSearch(nextSerial, nextQuery, nextCursor, nextAppend) })
         return
       }
 
       if (expectedStop || finishedSerial !== root.requestSerial || !root.opened || root.viewMode === "favorites") return
-      root.loading = false
+      if (finishedAppend) root.loadingMore = false
+      else root.loading = false
 
       if (exitCode !== 0 || exitStatus !== 0) {
         root.statusError = true
-        root.statusMessage = root.providerFailure(searchStderr.text, exitCode)
+        root.statusMessage = finishedAppend
+          ? "Could not load more GIFs. Scroll to the end to retry."
+          : root.providerFailure(searchStderr.text, exitCode)
         return
       }
 
       try {
-        var rows = Klipy.parseResponse(searchStdout.text)
-        root.replaceResults(rows)
+        var page = Klipy.parsePage(searchStdout.text)
+        var added = 0
+        if (finishedAppend)
+          added = root.appendResults(page.results)
+        else {
+          root.replaceResults(page.results)
+          added = resultModel.count
+        }
+        var candidate = String(page.next || "")
+        root.nextPosition = resultModel.count < root.maxResults
+          && candidate && candidate !== finishedCursor && added > 0 ? candidate : ""
         root.statusError = Boolean(root.stateStorageError)
         if (root.stateStorageError) {
           root.statusMessage = root.stateStorageError
         } else if (resultModel.count === 0) {
           root.statusMessage = root.query ? "No GIFs found. Try another search." : "No trending GIFs are available. Press Ctrl+R to retry."
-        } else if (root.query) {
-          root.statusMessage = resultModel.count + (resultModel.count === 1 ? " result for " : " results for ") + root.query
         } else {
-          root.statusMessage = "Trending GIFs"
+          root.statusMessage = root.resultsStatus()
         }
       } catch (error) {
         root.statusError = true
-        root.statusMessage = "The GIF provider returned an invalid response. Press Ctrl+R to retry."
+        root.statusMessage = finishedAppend
+          ? "The GIF provider returned an invalid next page. Scroll to the end to retry."
+          : "The GIF provider returned an invalid response. Press Ctrl+R to retry."
       }
     }
   }
@@ -857,7 +951,7 @@ Item {
           Text {
             anchors.right: parent.right
             anchors.top: parent.top
-            text: "Ctrl+1  Trending    Ctrl+2  Favourites    Powered by KLIPY"
+            text: "Type to search    Ctrl+1  Trending    Ctrl+2  Favourites    Powered by KLIPY"
             color: root.foreground
             opacity: 0.58
             font.family: root.fontFamily
@@ -894,6 +988,7 @@ Item {
               anchors.rightMargin: Style.spacing.xl
               anchors.verticalCenter: parent.verticalCenter
               text: root.query || (root.viewMode === "favorites" ? "Start typing to search GIFs" : "Search reaction GIFs")
+              textFormat: Text.PlainText
               color: root.foreground
               opacity: root.query ? 1 : 0.5
               font.family: root.fontFamily
@@ -913,11 +1008,21 @@ Item {
             model: resultModel
             clip: true
             reuseItems: true
-            cacheBuffer: 0
+            cacheBuffer: cellHeight
             boundsBehavior: Flickable.StopAtBounds
-            cellWidth: width / 4
+            cellWidth: width / root.columnCount
             cellHeight: height / 2
-            interactive: false
+            interactive: contentHeight > height
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            onContentYChanged: {
+              if (contentHeight > height
+                  && contentY + height >= contentHeight - cellHeight * 1.5)
+                root.loadNextPage()
+            }
+            onMovementEnded: {
+              if (atYEnd) root.loadNextPage()
+            }
 
             delegate: GifTile {
               width: resultGrid.cellWidth - Style.spacing.sm
@@ -974,6 +1079,7 @@ Item {
               text: root.loading
                 ? (root.query ? "Searching for GIFs" : "Loading trending GIFs")
                 : root.statusMessage
+              textFormat: Text.PlainText
               color: root.statusError ? Color.urgent : root.foreground
               opacity: 0.78
               font.family: root.fontFamily
@@ -989,7 +1095,7 @@ Item {
           width: parent.width
           message: root.statusMessage
           error: root.statusError
-          busy: root.loading || root.copying
+          busy: root.loading || root.loadingMore || root.copying
           foreground: root.foreground
         }
       }

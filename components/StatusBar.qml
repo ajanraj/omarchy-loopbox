@@ -31,6 +31,7 @@ Item {
       id: statusText
       width: Math.max(0, statusRow.width - (root.busy || root.error ? parent.spacing + Style.space(16) : 0))
       text: root.message
+      textFormat: Text.PlainText
       color: root.error ? Color.urgent : root.foreground
       opacity: root.message ? 0.9 : 0
       font.family: Style.font.menuFamily
