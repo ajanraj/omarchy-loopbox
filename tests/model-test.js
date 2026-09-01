@@ -49,7 +49,7 @@ function plain(value) {
 
 // Provider command construction is argv-only and keeps query data out of a shell.
 const hostileQuery = "funny cats & dogs; $(touch /tmp/loopbox-should-not-exist)";
-const searchArgv = Klipy.searchCommand(hostileQuery, 8);
+const searchArgv = Klipy.searchCommand(hostileQuery, 24);
 assert.deepStrictEqual(plain(searchArgv), [
   "curl",
   "--fail",
@@ -68,12 +68,12 @@ assert.deepStrictEqual(plain(searchArgv), [
   "--data-urlencode",
   "media_filter=gif,nanogif,tinygif",
   "--data-urlencode",
-  "limit=8",
+  "limit=24",
   "--data-urlencode",
   "q=" + hostileQuery,
 ]);
 assert.deepStrictEqual(
-  plain(Klipy.searchCommand("", 8)),
+  plain(Klipy.searchCommand("", 24)),
   [
     "curl",
     "--fail",
@@ -92,16 +92,29 @@ assert.deepStrictEqual(
     "--data-urlencode",
     "media_filter=gif,nanogif,tinygif",
     "--data-urlencode",
-    "limit=8",
+    "limit=24",
   ],
 );
 assert.deepStrictEqual(
-  plain(Klipy.searchCommand("   ", 8).slice(-2)),
-  ["--data-urlencode", "limit=8"],
+  plain(Klipy.searchCommand("   ", 24).slice(-2)),
+  ["--data-urlencode", "limit=24"],
 );
 assert.deepStrictEqual(
   plain(Klipy.searchCommand("query", 100).slice(-4)),
-  ["--data-urlencode", "limit=8", "--data-urlencode", "q=query"],
+  ["--data-urlencode", "limit=24", "--data-urlencode", "q=query"],
+);
+assert.deepStrictEqual(
+  plain(Klipy.searchCommand("query", 24, "Mg==").slice(-6)),
+  [
+    "--data-urlencode", "limit=24",
+    "--data-urlencode", "pos=Mg==",
+    "--data-urlencode", "q=query",
+  ],
+);
+assert.strictEqual(Klipy.searchCommand("query", 24, "bad cursor").includes("pos=bad cursor"), false);
+assert.strictEqual(
+  Klipy.searchCommand("x".repeat(200), 24).slice(-1)[0],
+  "q=" + "x".repeat(120),
 );
 
 // The live provider shape maps nanogif -> preview and gif -> original.
@@ -132,6 +145,14 @@ const hostileTitle = '<img src="https://attacker.invalid/title.png">Provider tit
 assert.strictEqual(parsed[3].title, hostileTitle);
 assert.strictEqual(Model.normalizeRecord(parsed[3]).title, hostileTitle);
 
+const parsedPage = Klipy.parsePage(JSON.stringify(Object.assign({}, fixture, { next: "Mg==" })));
+assert.strictEqual(parsedPage.results.length, 4);
+assert.strictEqual(parsedPage.next, "Mg==");
+assert.strictEqual(
+  Klipy.parsePage(JSON.stringify(Object.assign({}, fixture, { next: "bad cursor" }))).next,
+  "",
+);
+
 const safeOriginalUrl = "https://static.klipy.com/original/policy.gif";
 const safePreviewUrl = "https://static.klipy.com/nano/policy.gif";
 const safeTinyUrl = "https://static.klipy.com/tiny/policy.gif";
@@ -149,6 +170,24 @@ function providerRecord(id, urls) {
   });
   return record;
 }
+
+const cappedPage = Klipy.parsePage(JSON.stringify({
+  next: "Mg==",
+  results: Array.from({ length: 30 }, (_, index) => providerRecord("page-" + index, {
+    gif: safeOriginalUrl,
+    nanogif: safePreviewUrl,
+  })),
+}));
+assert.strictEqual(cappedPage.results.length, 24);
+assert.strictEqual(cappedPage.next, "Mg==");
+
+const boundedTitle = Klipy.parseResponse(JSON.stringify({
+  results: [Object.assign(providerRecord("bounded-title", { gif: safeOriginalUrl }), {
+    title: "A".repeat(200) + "\u202ehidden",
+  })],
+}))[0].title;
+assert.strictEqual(boundedTitle.length, 180);
+assert.strictEqual(boundedTitle.includes("\u202e"), false);
 
 const unsafeMediaUrls = [
   "http://static.klipy.com/original/http.gif",

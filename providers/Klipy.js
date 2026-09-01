@@ -3,9 +3,14 @@
 // Raycast's keyless KLIPY proxy is deliberately isolated here so the UI does
 // not need to know about its URL or the provider response shape.
 var KLIPY_ENDPOINT = "https://gif-search.raycast.com/api/klipy";
-var DEFAULT_LIMIT = 8;
-var MAX_LIMIT = 8;
+var DEFAULT_LIMIT = 24;
+var MAX_LIMIT = 24;
 var MAX_RESPONSE_BYTES = 256 * 1024;
+var MAX_QUERY_LENGTH = 120;
+var MAX_CURSOR_LENGTH = 128;
+var MAX_ID_LENGTH = 128;
+var MAX_TITLE_LENGTH = 180;
+var MAX_URL_LENGTH = 2048;
 var KLIPY_MEDIA_PREFIX = "https://static.klipy.com/";
 
 function safeLimit(limit) {
@@ -20,15 +25,24 @@ function queryText(query) {
   if (query === null || query === undefined) {
     return "";
   }
-  return typeof query === "string" ? query : String(query);
+  var text = typeof query === "string" ? query : String(query);
+  return text.slice(0, MAX_QUERY_LENGTH);
+}
+
+function safeCursor(cursor) {
+  if (typeof cursor !== "string" || cursor.length < 1 || cursor.length > MAX_CURSOR_LENGTH) {
+    return "";
+  }
+  return /^[A-Za-z0-9_-]+={0,2}$/.test(cursor) ? cursor : "";
 }
 
 /**
  * Build an argv array for Quickshell's Process. Every user-controlled value
  * stays in its own argv element; no shell parser ever sees the query.
  */
-function searchCommand(query, limit) {
+function searchCommand(query, limit, cursor) {
   var text = queryText(query);
+  var position = safeCursor(cursor);
   var argv = [
     "curl",
     "--fail",
@@ -50,6 +64,10 @@ function searchCommand(query, limit) {
     "limit=" + safeLimit(limit),
   ];
 
+  if (position) {
+    argv.push("--data-urlencode", "pos=" + position);
+  }
+
   // Whitespace-only input is the trending request and must not send q.
   if (text.trim().length > 0) {
     argv.push("--data-urlencode", "q=" + text);
@@ -62,15 +80,19 @@ function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function nonEmptyText(value) {
+function nonEmptyText(value, maximum) {
   if (typeof value !== "string") {
     return "";
   }
-  return value.trim();
+  var limit = Number(maximum) > 0 ? Math.floor(Number(maximum)) : MAX_TITLE_LENGTH;
+  return value
+    .slice(0, limit)
+    .replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, " ")
+    .trim();
 }
 
 function httpUrl(value) {
-  var text = nonEmptyText(value);
+  var text = nonEmptyText(value, MAX_URL_LENGTH);
   return /^https?:\/\//i.test(text) ? text : "";
 }
 
@@ -80,7 +102,7 @@ function httpUrl(value) {
  * the WHATWG URL parser.
  */
 function safeKlipyMediaUrl(value) {
-  if (typeof value !== "string" || !value) {
+  if (typeof value !== "string" || !value || value.length > MAX_URL_LENGTH) {
     return "";
   }
   if (/[\s\x00-\x1f\x7f-\x9f]/.test(value)) {
@@ -99,7 +121,7 @@ function safeKlipyMediaUrl(value) {
 
 function idText(value) {
   if (typeof value === "string") {
-    return value.trim();
+    return nonEmptyText(value, MAX_ID_LENGTH);
   }
   if (typeof value === "number" && isFinite(value)) {
     return String(value);
@@ -134,17 +156,17 @@ function mediaDims(media) {
 
 function errorText(value) {
   if (typeof value === "string") {
-    return value.trim();
+    return nonEmptyText(value, 240);
   }
   if (isObject(value)) {
-    return nonEmptyText(value.message)
-      || nonEmptyText(value.error)
-      || nonEmptyText(value.code)
-      || nonEmptyText(value.status)
+    return nonEmptyText(value.message, 240)
+      || nonEmptyText(value.error, 240)
+      || nonEmptyText(value.code, 80)
+      || nonEmptyText(value.status, 80)
       || "unknown provider error";
   }
   if (Array.isArray(value)) {
-    return value.map(errorText).filter(Boolean).join(", ");
+    return value.slice(0, 8).map(errorText).filter(Boolean).join(", ").slice(0, 240);
   }
   return value === undefined || value === null ? "unknown provider error" : String(value);
 }
@@ -170,7 +192,8 @@ function normalizeRecord(record) {
 
   var previewUrl = mediaUrl(nanogif) || mediaUrl(tinygif) || originalUrl;
   var dimensions = mediaDims(gif) || mediaDims(tinygif) || mediaDims(nanogif);
-  var title = nonEmptyText(record.title) || nonEmptyText(record.content_description);
+  var title = nonEmptyText(record.title, MAX_TITLE_LENGTH)
+    || nonEmptyText(record.content_description, MAX_TITLE_LENGTH);
 
   return {
     provider: "klipy",
@@ -191,7 +214,7 @@ function normalizeRecord(record) {
  * skipped, but a response with no usable records is surfaced to the UI as an
  * actionable provider error rather than looking like an empty search.
  */
-function parseResponse(rawText) {
+function parsePage(rawText) {
   if (typeof rawText !== "string") {
     throw new Error("Klipy response must be JSON text");
   }
@@ -225,7 +248,7 @@ function parseResponse(rawText) {
   }
 
   var results = [];
-  payload.results.forEach(function (record) {
+  payload.results.slice(0, MAX_LIMIT).forEach(function (record) {
     var normalized = normalizeRecord(record);
     if (normalized) {
       results.push(normalized);
@@ -236,11 +259,19 @@ function parseResponse(rawText) {
     throw new Error("Klipy response contained no valid results");
   }
 
-  return results;
+  return {
+    results: results,
+    next: results.length > 0 ? safeCursor(payload.next) : "",
+  };
+}
+
+function parseResponse(rawText) {
+  return parsePage(rawText).results;
 }
 
 var api = {
   searchCommand: searchCommand,
+  parsePage: parsePage,
   parseResponse: parseResponse,
 };
 
