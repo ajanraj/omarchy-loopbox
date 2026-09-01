@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Loopbox
+GenericName=GIF Search
+Comment=Search and copy animated GIFs
+Keywords=gif;gifs;reaction;reactions;animation;animated;loopbox;
+Exec=omarchy-shell shell toggle io.github.ajanraj.loopbox
+Icon=image-x-generic
+Terminal=false
+Categories=Utility;
+StartupNotify=false
+DBusActivatable=false
+X-Loopbox-Managed=true
+X-Loopbox-PluginId=io.github.ajanraj.loopbox

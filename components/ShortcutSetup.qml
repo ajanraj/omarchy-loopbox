@@ -13,6 +13,7 @@ Item {
   property string conflict: ""
   property string defaultConflict: ""
   property string errorMessage: ""
+  property string currentShortcut: ""
   property bool available: false
   property bool checking: false
   property bool installing: false
@@ -23,6 +24,7 @@ Item {
   signal nextRequested()
   signal installRequested()
   signal skipRequested()
+  signal cancelRequested()
 
   function displayShortcut(value) {
     return String(value || "").replace(/ \+ /g, "  ")
@@ -65,6 +67,8 @@ Item {
       width: parent.width
       text: root.checking
         ? "Checking this chord against current Omarchy and personal Hyprland bindings."
+        : root.currentShortcut
+        ? "Your active shortcut is " + root.displayShortcut(root.currentShortcut) + ". Type a letter or use the arrows to choose a new key."
         : root.defaultConflict
         ? root.defaultShortcut + " is already used by " + root.defaultConflict + ". Loopbox will never replace an existing shortcut."
         : "The default is free. Press Enter to add it, or type any letter to choose another key."
@@ -163,7 +167,9 @@ Item {
         || (root.checking ? "Checking current Hyprland bindings"
         : (root.installing ? "Adding shortcut and reloading Hyprland"
         : (root.conflict ? root.conflict + " already uses this shortcut. Type another letter."
-        : (root.available ? "Enter  Use shortcut     Type a letter  Pick key     Tab  Not now" : "Type a letter to choose another shortcut"))))
+        : (root.available
+          ? (root.currentShortcut ? "Enter  Save shortcut     Type a letter  Pick key     Tab  Keep current" : "Enter  Use shortcut     Type a letter  Pick key     Tab  Not now")
+          : "Type a letter to choose another shortcut"))))
       color: root.errorMessage || root.conflict ? Color.urgent : root.foreground
       opacity: root.errorMessage || root.conflict ? 1 : 0.62
       font.family: root.fontFamily
@@ -174,7 +180,7 @@ Item {
 
     Text {
       anchors.horizontalCenter: parent.horizontalCenter
-      text: "Use Loopbox without a shortcut"
+      text: root.currentShortcut ? "Keep current shortcut" : "Use Loopbox without a shortcut"
       color: root.foreground
       opacity: skipMouse.containsMouse ? 0.9 : 0.48
       font.family: root.fontFamily
@@ -187,7 +193,10 @@ Item {
         enabled: !root.installing
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.skipRequested()
+        onClicked: {
+          if (root.currentShortcut) root.cancelRequested()
+          else root.skipRequested()
+        }
       }
     }
   }

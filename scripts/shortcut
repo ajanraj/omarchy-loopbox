@@ -76,17 +76,24 @@ conflicting_binding() {
 print_status() {
     local shortcut=$1
     local force=${2:-false}
-    local binds_json configured conflict conflict_name skipped
+    local binds_json configured configured_shortcut conflict conflict_name skipped available
     parse_shortcut "$shortcut"
     if ! skipped=$("$state_helper" shortcut-status 2>&1); then
         fail "$skipped"
     fi
-    if [[ $force != true && $skipped == true ]]; then
-        jq -cn --arg shortcut "$shortcut" '{configured: false, skipped: true, shortcut: $shortcut, available: false, conflict: ""}'
-        return
-    fi
     binds_json=$(read_bindings)
     configured=$(configured_binding <<<"$binds_json")
+    configured_shortcut=$(jq -r '
+      if . == null then ""
+      elif .modmask == 69 and ((.key // "") | ascii_upcase | test("^[A-Z]$"))
+      then "SUPER + CTRL + SHIFT + " + ((.key // "") | ascii_upcase)
+      else ""
+      end
+    ' <<<"$configured")
+    if [[ $force != true && $skipped == true && $configured == null ]]; then
+        jq -cn --arg shortcut "$shortcut" '{configured: false, skipped: true, shortcut: $shortcut, currentShortcut: "", available: false, conflict: ""}'
+        return
+    fi
     conflict=$(conflicting_binding "$shortcut_mask" "$shortcut_key" <<<"$binds_json")
     conflict_name=$(jq -r '
       if . == null then ""
@@ -95,13 +102,18 @@ print_status() {
       else "Existing shortcut"
       end
     ' <<<"$conflict")
+    available=$(if [[ $conflict == null || $shortcut == "$configured_shortcut" ]]; then printf true; else printf false; fi)
+    if [[ $shortcut == "$configured_shortcut" ]]; then
+        conflict_name=""
+    fi
 
     jq -cn \
         --arg shortcut "$shortcut" \
+        --arg currentShortcut "$configured_shortcut" \
         --arg conflict "$conflict_name" \
         --argjson configured "$( [[ $configured == null ]] && printf false || printf true )" \
-        --argjson available "$( [[ $conflict == null ]] && printf true || printf false )" \
-        '{configured: $configured, skipped: false, shortcut: $shortcut, available: $available, conflict: $conflict}'
+        --argjson available "$available" \
+        '{configured: $configured, skipped: false, shortcut: $shortcut, currentShortcut: $currentShortcut, available: $available, conflict: $conflict}'
 }
 
 restore_config() {
@@ -154,7 +166,7 @@ finish_transaction() {
 
 install_shortcut() {
     local shortcut=$1
-    local binds_json configured conflict before_errors after_errors
+    local binds_json configured configured_shortcut conflict before_errors after_errors
     local config_dir bindings_backup shortcut_backup shortcut_tmp bindings_tmp
     local begin_count end_count
     local shortcut_existed=false
@@ -165,7 +177,14 @@ install_shortcut() {
 
     binds_json=$(read_bindings)
     configured=$(configured_binding <<<"$binds_json")
-    if [[ $configured != null ]]; then
+    configured_shortcut=$(jq -r '
+      if . == null then ""
+      elif .modmask == 69 and ((.key // "") | ascii_upcase | test("^[A-Z]$"))
+      then "SUPER + CTRL + SHIFT + " + ((.key // "") | ascii_upcase)
+      else ""
+      end
+    ' <<<"$configured")
+    if [[ $configured != null && $configured_shortcut == "$shortcut" ]]; then
         jq -cn --arg shortcut "$shortcut" '{installed: true, alreadyConfigured: true, shortcut: $shortcut}'
         return
     fi

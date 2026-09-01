@@ -6,6 +6,8 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 gif_tile="$script_dir/../components/GifTile.qml"
 loopbox="$script_dir/../Loopbox.qml"
 status_bar="$script_dir/../components/StatusBar.qml"
+shortcut_setup="$script_dir/../components/ShortcutSetup.qml"
+clipboard_helper="$script_dir/../scripts/clipboard-gif"
 
 if ! awk '
     /id: label/ { in_label = 1 }
@@ -112,6 +114,34 @@ grep -F 'onTextEdited: root.setQuery(text)' "$loopbox" >/dev/null || {
 }
 grep -F 'textFormat: Text.PlainText' "$status_bar" >/dev/null || {
     printf 'FAIL: search status text must render as plain text\n' >&2
+    exit 1
+}
+grep -F 'onClicked: root.shortcutRequested()' "$status_bar" >/dev/null || {
+    printf 'FAIL: the visible shortcut control must open shortcut settings\n' >&2
+    exit 1
+}
+grep -F 'currentShortcut: root.configuredShortcut' "$loopbox" >/dev/null || {
+    printf 'FAIL: shortcut settings must display the active chord\n' >&2
+    exit 1
+}
+grep -F 'onCancelRequested: root.cancelShortcutSetup()' "$loopbox" >/dev/null || {
+    printf 'FAIL: rebinding must allow the active shortcut to be kept\n' >&2
+    exit 1
+}
+grep -F 'if (!root.forceShortcutSetup)' "$loopbox" >/dev/null || {
+    printf 'FAIL: a forced bar-icon setup request must not skip past shortcut settings\n' >&2
+    exit 1
+}
+grep -F 'setupShortcut\":true' "$script_dir/../BarWidget.qml" >/dev/null || {
+    printf 'FAIL: right-clicking the bar icon must request shortcut settings\n' >&2
+    exit 1
+}
+grep -F 'Gdk.FileList.new_from_list' "$clipboard_helper" >/dev/null || {
+    printf 'FAIL: GIF copy must advertise the original file to clipboard consumers\n' >&2
+    exit 1
+}
+grep -F 'new_for_bytes("image/gif"' "$clipboard_helper" >/dev/null || {
+    printf 'FAIL: GIF copy must also advertise the original image/gif bytes\n' >&2
     exit 1
 }
 

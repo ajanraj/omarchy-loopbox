@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+source_entry="$script_dir/../desktop/io.github.ajanraj.loopbox.desktop"
+data_home=${XDG_DATA_HOME:-${HOME:?HOME is not set}/.local/share}
+applications_dir="$data_home/applications"
+destination="$applications_dir/io.github.ajanraj.loopbox.desktop"
+managed_marker="X-Loopbox-Managed=true"
+plugin_marker="X-Loopbox-PluginId=io.github.ajanraj.loopbox"
+
+fail() {
+    printf 'Loopbox launcher: %s\n' "$*" >&2
+    exit 1
+}
+
+validate_existing_destination() {
+    [[ ! -L $destination ]] || fail "$destination must not be a symbolic link."
+    [[ ! -e $destination || -f $destination ]] || fail "$destination is not a regular file."
+    if [[ -f $destination ]]; then
+        [[ $(stat -c '%u' -- "$destination") == "$UID" ]] || fail "$destination is not owned by the current user."
+        [[ $(stat -c '%s' -- "$destination") -le 16384 ]] || fail "$destination is unexpectedly large and will not be replaced."
+        grep -Fx -- "$managed_marker" "$destination" >/dev/null || fail "$destination is not managed by Loopbox and will not be replaced."
+        grep -Fx -- "$plugin_marker" "$destination" >/dev/null || fail "$destination belongs to another application and will not be replaced."
+    fi
+}
+
+refresh_database() {
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$applications_dir" >/dev/null 2>&1 || true
+    fi
+}
+
+install_launcher() {
+    [[ -f $source_entry && ! -L $source_entry ]] || fail "the packaged desktop entry is missing or unsafe."
+    [[ ! -L $applications_dir ]] || fail "$applications_dir must not be a symbolic link."
+    if [[ -e $applications_dir && ! -d $applications_dir ]]; then
+        fail "$applications_dir is not a directory."
+    fi
+    if [[ ! -d $applications_dir ]]; then
+        install -d -m 0755 -- "$applications_dir"
+    fi
+    [[ $(stat -c '%u' -- "$applications_dir") == "$UID" ]] || fail "$applications_dir is not owned by the current user."
+    validate_existing_destination
+
+    local staged
+    staged=$(mktemp --suffix=.desktop "$applications_dir/.loopbox-desktop.XXXXXX")
+    trap 'rm -f -- "$staged"' EXIT INT TERM HUP
+    install -m 0644 -- "$source_entry" "$staged"
+    if command -v desktop-file-validate >/dev/null 2>&1; then
+        desktop-file-validate "$staged" || fail "the packaged desktop entry is invalid."
+    fi
+    mv -f -- "$staged" "$destination"
+    trap - EXIT INT TERM HUP
+    refresh_database
+    printf 'Installed Loopbox in the app launcher: %s\n' "$destination"
+}
+
+remove_launcher() {
+    if [[ ! -e $destination && ! -L $destination ]]; then
+        printf 'Loopbox launcher is not installed.\n'
+        return
+    fi
+    validate_existing_destination
+    rm -- "$destination"
+    refresh_database
+    printf 'Removed Loopbox from the app launcher.\n'
+}
+
+launcher_status() {
+    if [[ -f $destination && ! -L $destination ]] &&
+       grep -Fx -- "$managed_marker" "$destination" >/dev/null 2>&1 &&
+       grep -Fx -- "$plugin_marker" "$destination" >/dev/null 2>&1; then
+        printf '{"installed":true,"path":"%s"}\n' "$destination"
+    else
+        printf '{"installed":false,"path":"%s"}\n' "$destination"
+    fi
+}
+
+case ${1:-install} in
+    install)
+        [[ $# -eq 1 ]] || fail "usage: launcher [install|remove|status]"
+        install_launcher
+        ;;
+    remove)
+        [[ $# -eq 1 ]] || fail "usage: launcher [install|remove|status]"
+        remove_launcher
+        ;;
+    status)
+        [[ $# -eq 1 ]] || fail "usage: launcher [install|remove|status]"
+        launcher_status
+        ;;
+    *)
+        fail "usage: launcher [install|remove|status]"
+        ;;
+esac
