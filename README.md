@@ -9,8 +9,9 @@ Loopbox is a fast keyboard-first Omarchy GIF picker and reaction GIF search plug
 - Searches reaction GIFs through KLIPY with no API key or setup
 - Shows trending GIFs as soon as the overlay opens
 - Adds a Loopbox image icon to the Omarchy bar
+- Adds an optional desktop launcher searchable as `gif` or `Loopbox`
 - Loads scrollable results in 24-item pages, capped at 96 per search
-- Copies GIFs as animated PNG clipboard data with Enter for reliable Wayland paste support
+- Copies the original animated GIF as a clipboard file with Enter for Slack and other file-aware apps
 - Copies the direct GIF URL with Shift+Enter when an app does not accept image data
 - Saves up to 50 favourites and 20 recent selections locally
 
@@ -19,7 +20,7 @@ Loopbox is a fast keyboard-first Omarchy GIF picker and reaction GIF search plug
 Loopbox targets current Omarchy 4 releases with the Quickshell-based Omarchy shell. It uses tools included with Omarchy:
 
 - `curl` for GIF search and downloads
-- `ffmpeg` for cached GIF-to-APNG conversion before clipboard copy
+- GTK 4 with PyGObject for advertising the GIF as both a clipboard file and `image/gif` data
 - `python3`, `jq`, and `hyprctl` for media URL checks, safe local state, and shortcut setup
 - Standard `coreutils` and `util-linux` tools for bounded downloads and cache coordination
 - `wl-clipboard` through Omarchy's `omarchy-clipboard-paste-file` helper
@@ -40,6 +41,14 @@ Omarchy adds the Loopbox image icon to the right side of the bar by default. An 
 The first open offers `Super+Ctrl+Shift+L`. Current Omarchy defaults do not use this chord. Press Enter to accept it. Loopbox checks the live Hyprland binding table first, so custom shortcuts count too. If another action uses the default, Loopbox names the conflict and selects a free alternative. Type any letter to test `Super+Ctrl+Shift` with that key, or use Left and Right to browse suggestions, then press Enter. Loopbox never unbinds or replaces an existing action.
 
 Omarchy's plugin installer cannot run plugin code or interactive install hooks. Shortcut choice therefore happens inside Loopbox on first launch, after installation. Press Tab to decline a shortcut and keep opening Loopbox from the bar icon. Loopbox remembers that choice; right-click the bar icon if you change your mind.
+
+To make Loopbox available from the Omarchy application launcher, run the explicit installer once:
+
+```bash
+~/.config/omarchy/plugins/io.github.ajanraj.loopbox/scripts/launcher install
+```
+
+Then press `Super+Space`, type `gif` or `Loopbox`, and press Enter. The desktop entry is kept separate from plugin enablement because marketplace plugins do not silently write application launchers.
 
 After confirmation, Loopbox writes its binding to `~/.config/hypr/loopbox.lua`, adds a small managed loader block to `~/.config/hypr/bindings.lua`, reloads Hyprland, and checks for new configuration errors. A failed reload restores both files.
 
@@ -64,7 +73,7 @@ Open Loopbox and start typing or paste into the already-focused search field. It
 | Arrow keys | Move through the grid |
 | Mouse wheel / touchpad | Scroll through results and load the next page near the end |
 | Home / End | Select the first / last result |
-| Enter | Copy the selected GIF as animated `image/png` |
+| Enter | Copy the selected original GIF as a file and `image/gif` data |
 | Shift+Enter | Copy the selected GIF URL |
 | Ctrl+1 | Show trending GIFs |
 | Ctrl+2 | Show favourites |
@@ -74,7 +83,9 @@ Open Loopbox and start typing or paste into the already-focused search field. It
 
 During shortcut setup, type a letter to choose its `Super+Ctrl+Shift` chord. Left and Right browse suggestions, Enter confirms, Tab declines future prompts, and Escape closes Loopbox.
 
-After Enter succeeds, Loopbox closes and the animation is ready to paste with `Super+V` or the target application's normal paste shortcut. Loopbox converts the original GIF to APNG because Chromium and Omarchy's clipboard history accept `image/png` reliably while preserving animation. If an application rejects animated image clipboard data, use Shift+Enter and paste the direct URL instead.
+The bottom-right shortcut control always shows the active chord. Select it to open shortcut settings and safely rebind Loopbox; if no chord is configured, it reads **Set shortcut**. Right-clicking the bar icon opens the same panel.
+
+After Enter succeeds, Loopbox closes and the original `.gif` is ready to paste with `Super+V` or the target application's normal paste shortcut. Loopbox advertises the cached GIF as a file and as `image/gif` bytes, allowing Slack and other apps to choose the representation they support. If an application rejects GIF clipboard files, use Shift+Enter and paste the direct URL instead.
 
 ## Provider and privacy
 
@@ -89,18 +100,19 @@ GIF results and content are provided by [KLIPY](https://klipy.com/). Their terms
 Loopbox stores only:
 
 - Favourites and recents in `$XDG_STATE_HOME/loopbox/state.json` (default: `~/.local/state/loopbox/state.json`)
-- Copied original GIFs and their clipboard-ready APNG files in `$XDG_CACHE_HOME/loopbox/gifs/` (default: `~/.cache/loopbox/gifs/`)
+- Copied original GIF files in `$XDG_CACHE_HOME/loopbox/gifs/` (default: `~/.cache/loopbox/gifs/`)
 - Hardened local preview GIFs in `$XDG_CACHE_HOME/loopbox/previews/` (default: `~/.cache/loopbox/previews/`)
 - The confirmed shortcut in `~/.config/hypr/loopbox.lua`, loaded by a marked block in `~/.config/hypr/bindings.lua`
+- The optional app-menu entry at `$XDG_DATA_HOME/applications/io.github.ajanraj.loopbox.desktop` (default: `~/.local/share/applications/io.github.ajanraj.loopbox.desktop`)
 - A shortcut-declined marker at `$XDG_STATE_HOME/loopbox/shortcut-setup-skipped`
 
-The copy cache is bounded to 20 GIF/APNG pairs and 150 MiB. The preview cache is bounded to 16 GIFs and 120 MiB. Search responses are limited to 24 results per page and 96 retained results per query; they are not persisted.
+The copy cache is bounded to 20 GIFs and 150 MiB. The preview cache is bounded to 16 GIFs and 120 MiB. Search responses are limited to 24 results per page and 96 retained results per query; they are not persisted.
 
 ## Troubleshooting
 
 **Search does not load:** check network access and retry with Ctrl+R. A rate-limit or provider outage is shown without closing the overlay.
 
-**A GIF will not paste:** confirm `ffmpeg` and `wl-copy` are installed, then retry. Use Shift+Enter to copy the direct URL if the target rejects animated PNG clipboard data. Loopbox keeps the overlay open when download, conversion, validation, or clipboard ownership fails.
+**A GIF will not paste:** confirm GTK 4 and its Python bindings are installed, then retry. Use Shift+Enter to copy the direct URL if the target rejects GIF clipboard files. Loopbox keeps the overlay open when download, validation, or clipboard ownership fails.
 
 **The bar icon is missing:** confirm the plugin is enabled with `omarchy-shell shell listPlugins`, then place its widget with `omarchy bar put io.github.ajanraj.loopbox --section right`.
 
@@ -117,6 +129,7 @@ Remove the managed shortcut first, while the plugin helper is still installed:
 
 ```bash
 ~/.config/omarchy/plugins/io.github.ajanraj.loopbox/scripts/shortcut remove
+~/.config/omarchy/plugins/io.github.ajanraj.loopbox/scripts/launcher remove
 ```
 
 Then remove the plugin checkout and disable it:
@@ -144,6 +157,7 @@ bash tests/clipboard-test.sh
 bash tests/preview-test.sh
 bash tests/state-test.sh
 bash tests/shortcut-test.sh
+bash tests/launcher-test.sh
 omarchy plugin validate .
 ```
 

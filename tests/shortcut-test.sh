@@ -148,9 +148,23 @@ assert_eq 1 "$(grep -Fc 'require("hypr.loopbox")' "$bindings_file")" 'managed re
 printf '%s\n' '[{"submap":"","modmask":69,"key":"L","description":"Loopbox"}]' >"$binds_file"
 configured_status=$("$shortcut_helper" status 'SUPER + CTRL + SHIFT + J')
 assert_eq true "$(jq -r '.configured' <<<"$configured_status")" 'a live Loopbox binding must skip onboarding'
+assert_eq 'SUPER + CTRL + SHIFT + L' "$(jq -r '.currentShortcut' <<<"$configured_status")" 'status must report the active managed shortcut'
+assert_eq true "$(jq -r '.available' <<<"$configured_status")" 'a free replacement chord must be available while Loopbox is configured'
+rebind_result=$("$shortcut_helper" install 'SUPER + CTRL + SHIFT + J')
+assert_eq false "$(jq -r '.alreadyConfigured' <<<"$rebind_result")" 'a different free chord must rebind Loopbox'
+assert_contains 'o.bind("SUPER + CTRL + SHIFT + J", "Loopbox"' "$shortcut_file" 'rebinding must replace the managed chord'
+assert_eq 1 "$(grep -Fc 'require("hypr.loopbox")' "$bindings_file")" 'rebinding must not duplicate the managed require'
+
+printf '%s\n' '[{"submap":"","modmask":69,"key":"J","description":"Loopbox"}]' >"$binds_file"
 repeat_result=$("$shortcut_helper" install 'SUPER + CTRL + SHIFT + J')
-assert_eq true "$(jq -r '.alreadyConfigured' <<<"$repeat_result")" 'repeat setup must be idempotent'
-assert_eq 1 "$(grep -Fc 'require("hypr.loopbox")' "$bindings_file")" 'repeat setup must not duplicate the managed require'
+assert_eq true "$(jq -r '.alreadyConfigured' <<<"$repeat_result")" 'installing the active chord must be idempotent'
+
+printf '%s\n' '[{"submap":"","modmask":69,"key":"J","description":"Loopbox"},{"submap":"","modmask":69,"key":"U","description":"Notes"}]' >"$binds_file"
+current_shortcut_contents=$(<"$shortcut_file")
+run_failure "$test_root/rebind-collision.stdout" "$test_root/rebind-collision.stderr" install 'SUPER + CTRL + SHIFT + U'
+(( RUN_STATUS != 0 )) || fail 'rebinding must refuse an occupied chord'
+assert_eq "$current_shortcut_contents" "$(<"$shortcut_file")" 'a rebind collision must preserve the active shortcut'
+assert_contains 'Notes already uses' "$test_root/rebind-collision.stderr" 'a rebind collision must name the existing action'
 
 printf '%s\n' '[]' >"$binds_file"
 remove_result=$("$shortcut_helper" remove)

@@ -47,9 +47,11 @@ Item {
   property string shortcutConflict: ""
   property string shortcutDefaultConflict: ""
   property string shortcutError: ""
+  property string configuredShortcut: ""
   property string customShortcut: ""
   property bool shortcutInstallPending: false
   property bool forceShortcutSetup: false
+  property bool shortcutSeeded: false
   property var shortcutCandidates: [
     "SUPER + CTRL + SHIFT + L",
     "SUPER + CTRL + SHIFT + J",
@@ -116,6 +118,7 @@ Item {
     root.shortcutError = ""
     root.customShortcut = ""
     root.shortcutInstallPending = false
+    root.shortcutSeeded = false
     if (!root.pluginDirectory) {
       root.shortcutError = "Loopbox could not locate its shortcut helper. Press Tab to continue without a shortcut."
       return
@@ -180,6 +183,18 @@ Item {
     shortcutProc.running = true
   }
 
+  function cancelShortcutSetup() {
+    if (root.shortcutInstalling || shortcutProc.running) return
+    root.openPicker("")
+  }
+
+  function showShortcutSettings() {
+    if (root.shortcutInstalling || shortcutProc.running) return
+    root.forceShortcutSetup = true
+    root.beginShortcutSetup()
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
   function openPicker(message, error) {
     root.shortcutSerial += 1
     if (shortcutProc.running) shortcutProc.running = false
@@ -214,7 +229,8 @@ Item {
       } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
         root.installSelectedShortcut()
       } else if (event.key === Qt.Key_Tab) {
-        root.skipShortcutSetup()
+        if (root.configuredShortcut) root.cancelShortcutSetup()
+        else root.skipShortcutSetup()
       } else if (!control && !shift
                  && !(event.modifiers & (Qt.AltModifier | Qt.MetaModifier))
                  && event.text && /^[a-zA-Z]$/.test(event.text)) {
@@ -791,7 +807,7 @@ Item {
       }
       root.state = LoopboxModel.addRecent(root.state, pendingResult)
       root.statusError = false
-      root.statusMessage = "GIF copied to the clipboard"
+      root.statusMessage = "GIF file copied to the clipboard"
       root.saveState("recents", true)
     }
   }
@@ -861,12 +877,24 @@ Item {
         return
       }
       if (finishedAction === "install" && response.installed) {
+        root.configuredShortcut = String(response.shortcut || root.selectedShortcut)
         root.openPicker("Shortcut ready. Trending GIFs")
         return
       }
       if (response.configured) {
-        root.openPicker("")
-        return
+        root.configuredShortcut = String(response.currentShortcut || "")
+        if (!root.forceShortcutSetup) {
+          root.openPicker("")
+          return
+        }
+        if (!root.shortcutSeeded) {
+          root.shortcutSeeded = true
+          if (root.configuredShortcut && root.selectedShortcut !== root.configuredShortcut) {
+            root.customShortcut = root.configuredShortcut
+            Qt.callLater(function() { root.checkShortcutCandidate(false) })
+            return
+          }
+        }
       }
 
       root.shortcutAvailable = Boolean(response.available)
@@ -1136,8 +1164,10 @@ Item {
           width: parent.width
           message: root.statusMessage
           error: root.statusError
-          busy: root.loading || root.loadingMore || root.copying
-          foreground: root.foreground
+        busy: root.loading || root.loadingMore || root.copying
+        foreground: root.foreground
+        shortcut: root.configuredShortcut
+        onShortcutRequested: root.showShortcutSettings()
         }
       }
 
@@ -1157,6 +1187,7 @@ Item {
         conflict: root.shortcutConflict
         defaultConflict: root.shortcutDefaultConflict
         errorMessage: root.shortcutError
+        currentShortcut: root.configuredShortcut
         available: root.shortcutAvailable
         checking: root.shortcutChecking
         installing: root.shortcutInstalling
@@ -1166,6 +1197,7 @@ Item {
         onNextRequested: root.chooseShortcut(1)
         onInstallRequested: root.installSelectedShortcut()
         onSkipRequested: root.skipShortcutSetup()
+        onCancelRequested: root.cancelShortcutSetup()
       }
     }
   }

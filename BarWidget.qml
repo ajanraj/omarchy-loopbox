@@ -13,7 +13,7 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: "\uf03e"
-    tooltipText: "Loopbox GIF picker"
+    tooltipText: "Loopbox · left: GIF search · right: shortcut settings"
 
     onPressed: function(mouseButton) {
       if (!root.bar) return
