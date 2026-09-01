@@ -100,14 +100,14 @@ fi
 assert_contains 'HTTP 302' "$test_root/redirect.err" 'redirect failure must report the rejected status'
 assert_eq 1 "$(find "$cache_home/loopbox/previews" -maxdepth 1 -type f -name '*.gif' | wc -l)" 'redirect bodies must not create cache entries'
 
-for index in $(seq -w 1 17); do
+for index in $(seq -w 1 49); do
     old="$cache_home/loopbox/previews/${index}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.gif"
     printf 'GIF89a old preview %s\n' "$index" >"$old"
     touch -t "2000010100${index}" "$old"
 done
 "$preview_gif" "$url" >/dev/null
 count=$(find "$cache_home/loopbox/previews" -maxdepth 1 -type f -name '*.gif' | wc -l)
-((count <= 16)) || fail 'preview pruning must retain at most 16 files'
+((count <= 48)) || fail 'preview pruning must retain at most 48 files'
 if find "$cache_home/loopbox/previews" -maxdepth 1 -type f -name '01*.gif' -print -quit | grep -q .; then
     fail 'preview pruning must remove the oldest file first'
 fi

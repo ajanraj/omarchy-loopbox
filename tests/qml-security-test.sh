@@ -7,6 +7,7 @@ gif_tile="$script_dir/../components/GifTile.qml"
 loopbox="$script_dir/../Loopbox.qml"
 status_bar="$script_dir/../components/StatusBar.qml"
 shortcut_setup="$script_dir/../components/ShortcutSetup.qml"
+key_hint="$script_dir/../components/KeyHint.qml"
 clipboard_helper="$script_dir/../scripts/clipboard-gif"
 
 if ! awk '
@@ -29,6 +30,14 @@ animated_source=$(awk '
 }
 [[ "$animated_source" != *'previewUrl'* ]] || {
     printf 'FAIL: provider preview URLs must never be assigned to AnimatedImage.source\n' >&2
+    exit 1
+}
+grep -F 'fillMode: Image.PreserveAspectFit' "$gif_tile" >/dev/null || {
+    printf 'FAIL: GIF cards must letterbox previews instead of cropping or stretching them\n' >&2
+    exit 1
+}
+grep -F 'anchors.bottom: caption.top' "$gif_tile" >/dev/null || {
+    printf 'FAIL: GIF card captions must occupy a separate row below the preview\n' >&2
     exit 1
 }
 
@@ -54,6 +63,18 @@ grep -F 'if (!running && launchPending)' "$gif_tile" >/dev/null || {
 }
 grep -F 'previewScript: root.previewScript' "$loopbox" >/dev/null || {
     printf 'FAIL: preview delegates must receive the local preview helper\n' >&2
+    exit 1
+}
+grep -F 'source: root.fullPreviewPath' "$loopbox" >/dev/null || {
+    printf 'FAIL: full-window previews must decode only a local cache path\n' >&2
+    exit 1
+}
+grep -F 'fullPreviewProc.command = [root.previewScript, result.previewUrl]' "$loopbox" >/dev/null || {
+    printf 'FAIL: full-window provider URLs must pass through the hardened preview helper\n' >&2
+    exit 1
+}
+grep -F 'event.key === Qt.Key_Space' "$loopbox" >/dev/null || {
+    printf 'FAIL: the selected GIF must expose its full-window Space preview\n' >&2
     exit 1
 }
 if grep -Eq '^[[:space:]]*(provider|resultId):[[:space:]]*model\.' "$loopbox"; then
@@ -116,6 +137,18 @@ grep -F 'textFormat: Text.PlainText' "$status_bar" >/dev/null || {
     printf 'FAIL: search status text must render as plain text\n' >&2
     exit 1
 }
+grep -F 'KeyHint {' "$status_bar" >/dev/null || {
+    printf 'FAIL: bottom-bar shortcuts must be presented as distinct key/action groups\n' >&2
+    exit 1
+}
+grep -F '"Launch shortcut"' "$status_bar" >/dev/null || {
+    printf 'FAIL: the configured launcher chord must identify the action it opens\n' >&2
+    exit 1
+}
+grep -F 'chord: "Ctrl+1"' "$loopbox" >/dev/null || {
+    printf 'FAIL: header navigation must present shortcuts as distinct key/action groups\n' >&2
+    exit 1
+}
 grep -F 'onClicked: root.shortcutRequested()' "$status_bar" >/dev/null || {
     printf 'FAIL: the visible shortcut control must open shortcut settings\n' >&2
     exit 1
@@ -126,6 +159,22 @@ grep -F 'currentShortcut: root.configuredShortcut' "$loopbox" >/dev/null || {
 }
 grep -F 'onCancelRequested: root.cancelShortcutSetup()' "$loopbox" >/dev/null || {
     printf 'FAIL: rebinding must allow the active shortcut to be kept\n' >&2
+    exit 1
+}
+grep -F 'onLauncherInstallRequested: root.installLauncher()' "$loopbox" >/dev/null || {
+    printf 'FAIL: settings must expose the explicit Omarchy-menu install action\n' >&2
+    exit 1
+}
+grep -F 'launcherProc.command = [root.launcherScript, "install"]' "$loopbox" >/dev/null || {
+    printf 'FAIL: the Omarchy-menu action must use a fixed launcher-helper command\n' >&2
+    exit 1
+}
+grep -F '"Add to Omarchy menu"' "$shortcut_setup" >/dev/null || {
+    printf 'FAIL: the external app-menu write must have a clearly labelled UI action\n' >&2
+    exit 1
+}
+grep -F 'scripts/launcher' "$loopbox" >/dev/null || {
+    printf 'FAIL: settings must resolve the packaged launcher helper\n' >&2
     exit 1
 }
 grep -F 'if (!root.forceShortcutSetup)' "$loopbox" >/dev/null || {
@@ -146,4 +195,5 @@ grep -F 'new_for_bytes("image/gif"' "$clipboard_helper" >/dev/null || {
 }
 
 qmllint "$gif_tile"
+qmllint "$loopbox" "$shortcut_setup" "$status_bar" "$key_hint"
 printf 'PASS: QML provider text and local preview security contracts\n'

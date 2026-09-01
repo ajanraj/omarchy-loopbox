@@ -19,12 +19,14 @@ fail() {
     exit 1
 }
 
-"$launcher" install >/dev/null
+install_output=$("$launcher" install)
+[[ $install_output == 'Loopbox is now available in the Omarchy menu.' ]] || fail 'install must return a bounded confirmation without reflecting a filesystem path'
 desktop-file-validate "$destination"
 grep -Fx 'Exec=omarchy-shell shell toggle io.github.ajanraj.loopbox' "$destination" >/dev/null || fail 'launcher must use the fixed Loopbox IPC command'
 grep -Fx 'GenericName=GIF Search' "$destination" >/dev/null || fail 'launcher must be searchable as GIF Search'
 grep -F 'Keywords=gif;' "$destination" >/dev/null || fail 'launcher must be searchable by the gif keyword'
 [[ $("$launcher" status | jq -r '.installed') == true ]] || fail 'installed launcher must report its status'
+[[ $("$launcher" status | jq 'keys == ["installed"]') == true ]] || fail 'launcher status must not reflect a user-controlled path into QML'
 
 "$launcher" install >/dev/null
 "$launcher" remove >/dev/null

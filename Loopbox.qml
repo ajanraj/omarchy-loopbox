@@ -52,6 +52,16 @@ Item {
   property bool shortcutInstallPending: false
   property bool forceShortcutSetup: false
   property bool shortcutSeeded: false
+  property bool launcherInstalled: false
+  property bool launcherChecking: false
+  property bool launcherInstalling: false
+  property string launcherError: ""
+  property bool fullPreviewVisible: false
+  property bool fullPreviewLoading: false
+  property string fullPreviewPath: ""
+  property string fullPreviewTitle: ""
+  property string fullPreviewError: ""
+  property int fullPreviewSerial: 0
   property var shortcutCandidates: [
     "SUPER + CTRL + SHIFT + L",
     "SUPER + CTRL + SHIFT + J",
@@ -64,6 +74,7 @@ Item {
   readonly property string copyScript: pluginDirectory + "/scripts/copy-gif"
   readonly property string previewScript: pluginDirectory + "/scripts/preview-gif"
   readonly property string shortcutScript: pluginDirectory + "/scripts/shortcut"
+  readonly property string launcherScript: pluginDirectory + "/scripts/launcher"
   readonly property string stateScript: pluginDirectory ? pluginDirectory + "/scripts/state" : ""
   readonly property string selectedShortcut: customShortcut || shortcutCandidates[shortcutCandidateIndex] || shortcutCandidates[0]
   readonly property int pageSize: 24
@@ -95,6 +106,7 @@ Item {
     root.loading = false
     root.loadingMore = false
     root.nextPosition = ""
+    root.closeFullPreview()
     resultModel.clear()
     root.requestSerial += 1
     root.forceShortcutSetup = false
@@ -119,11 +131,36 @@ Item {
     root.customShortcut = ""
     root.shortcutInstallPending = false
     root.shortcutSeeded = false
+    root.launcherChecking = false
+    root.launcherInstalling = false
+    root.launcherInstalled = false
+    root.launcherError = ""
     if (!root.pluginDirectory) {
       root.shortcutError = "Loopbox could not locate its shortcut helper. Press Tab to continue without a shortcut."
+      root.launcherError = "Loopbox could not locate its app-menu helper."
       return
     }
+    root.checkLauncherStatus()
     root.checkShortcutCandidate(true)
+  }
+
+  function checkLauncherStatus() {
+    if (!root.opened || !root.shortcutSetup || launcherProc.running || !root.launcherScript) return
+    root.launcherChecking = true
+    root.launcherError = ""
+    launcherProc.action = "status"
+    launcherProc.command = [root.launcherScript, "status"]
+    launcherProc.running = true
+  }
+
+  function installLauncher() {
+    if (!root.opened || !root.shortcutSetup || root.launcherInstalled
+        || root.launcherChecking || root.launcherInstalling || launcherProc.running) return
+    root.launcherInstalling = true
+    root.launcherError = ""
+    launcherProc.action = "install"
+    launcherProc.command = [root.launcherScript, "install"]
+    launcherProc.running = true
   }
 
   function checkShortcutCandidate(findAlternative) {
@@ -211,6 +248,38 @@ Item {
     })
   }
 
+  function closeFullPreview() {
+    root.fullPreviewSerial += 1
+    if (fullPreviewProc.running) fullPreviewProc.running = false
+    root.fullPreviewVisible = false
+    root.fullPreviewLoading = false
+    root.fullPreviewPath = ""
+    root.fullPreviewTitle = ""
+    root.fullPreviewError = ""
+  }
+
+  function openFullPreview() {
+    var result = root.resultAt(root.selectedIndex)
+    if (!result || !result.previewUrl || !root.previewScript) return
+    root.fullPreviewSerial += 1
+    if (fullPreviewProc.running) fullPreviewProc.running = false
+    root.fullPreviewVisible = true
+    root.fullPreviewLoading = true
+    root.fullPreviewPath = ""
+    root.fullPreviewTitle = result.title || "Untitled GIF"
+    root.fullPreviewError = ""
+    fullPreviewProc.serial = root.fullPreviewSerial
+    fullPreviewProc.expectedUrl = result.previewUrl
+    fullPreviewProc.command = [root.previewScript, result.previewUrl]
+    fullPreviewProc.running = true
+  }
+
+  function navigateFullPreview(direction) {
+    if (root.fullPreviewLoading) return
+    root.navigate(direction)
+    root.openFullPreview()
+  }
+
   function handleKey(event) {
     var control = (event.modifiers & Qt.ControlModifier) !== 0
     var shift = (event.modifiers & Qt.ShiftModifier) !== 0
@@ -240,7 +309,36 @@ Item {
       return
     }
 
-    if (event.key === Qt.Key_Escape) {
+    if (root.fullPreviewVisible) {
+      if (event.key === Qt.Key_Escape || event.key === Qt.Key_Space) {
+        root.closeFullPreview()
+        Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+      } else if (event.key === Qt.Key_Left) {
+        root.navigateFullPreview("left")
+      } else if (event.key === Qt.Key_Right) {
+        root.navigateFullPreview("right")
+      } else if (event.key === Qt.Key_Up) {
+        root.navigateFullPreview("up")
+      } else if (event.key === Qt.Key_Down) {
+        root.navigateFullPreview("down")
+      } else if (event.key === Qt.Key_Home || event.key === Qt.Key_PageUp) {
+        root.navigateFullPreview("home")
+      } else if (event.key === Qt.Key_End || event.key === Qt.Key_PageDown) {
+        root.navigateFullPreview("end")
+      } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+        if (shift) root.copyLink(root.selectedIndex)
+        else root.copyGif(root.selectedIndex)
+      }
+      event.accepted = true
+      return
+    }
+
+    if (event.key === Qt.Key_Space
+        && (!searchInput.activeFocus || root.query.length === 0)
+        && resultModel.count > 0) {
+      root.openFullPreview()
+      event.accepted = true
+    } else if (event.key === Qt.Key_Escape) {
       if (root.query) root.setQuery("")
       else root.dismiss()
       event.accepted = true
@@ -258,6 +356,7 @@ Item {
       event.accepted = true
     } else if (!searchInput.activeFocus && Util.editsFilter(event, root.query)) {
       root.setQuery(Util.editedFilter(event, root.query))
+      searchInput.forceActiveFocus()
       event.accepted = true
     } else if (event.key === Qt.Key_Left) {
       root.navigate("left")
@@ -286,6 +385,7 @@ Item {
                && event.text && event.text.length === 1
                && event.text.charCodeAt(0) >= 32 && event.text.charCodeAt(0) !== 127) {
       root.setQuery(root.query + event.text)
+      searchInput.forceActiveFocus()
       event.accepted = true
     }
   }
@@ -302,6 +402,8 @@ Item {
     if (copyProc.running) copyProc.running = false
     if (linkProc.running) linkProc.running = false
     if (shortcutProc.running) shortcutProc.running = false
+    if (launcherProc.running) launcherProc.running = false
+    root.closeFullPreview()
     root.loading = false
     root.loadingMore = false
     root.nextPosition = ""
@@ -310,6 +412,8 @@ Item {
     root.shortcutSetup = false
     root.shortcutChecking = false
     root.shortcutInstalling = false
+    root.launcherChecking = false
+    root.launcherInstalling = false
     root.opened = false
   }
 
@@ -400,8 +504,8 @@ Item {
     root.nextPosition = ""
     root.statusError = Boolean(root.stateStorageError)
     root.statusMessage = root.stateStorageError || (resultModel.count > 0
-      ? resultModel.count + (resultModel.count === 1 ? " favourite" : " favourites")
-      : "No favourites yet. Select a GIF and press Ctrl+Shift+F.")
+      ? resultModel.count + (resultModel.count === 1 ? " favorite" : " favorites")
+      : "No favorites yet. Select a GIF and press Ctrl+Shift+F.")
   }
 
   function saveState(context, dismissWhenSaved) {
@@ -483,9 +587,9 @@ Item {
     if (root.stateSaveBlocksAction()) return
     var wasFavorite = LoopboxModel.isFavorite(root.state, result)
     root.state = LoopboxModel.toggleFavorite(root.state, result)
-    root.saveState("favourites", false)
+    root.saveState("favorites", false)
     root.statusError = false
-    root.statusMessage = wasFavorite ? "Removed from favourites" : "Added to favourites"
+    root.statusMessage = wasFavorite ? "Removed from favorites" : "Added to favorites"
     if (root.viewMode === "favorites") root.loadFavorites()
   }
 
@@ -602,6 +706,7 @@ Item {
     root.selectedIndex = LoopboxModel.navigate(root.selectedIndex, direction, resultModel.count, root.columnCount)
     if (root.selectedIndex >= 0)
       resultGrid.positionViewAtIndex(root.selectedIndex, GridView.Contain)
+    keyCatcher.forceActiveFocus()
     if (root.selectedIndex >= resultModel.count - root.columnCount * 2)
       root.loadNextPage()
   }
@@ -834,6 +939,62 @@ Item {
   }
 
   Process {
+    id: fullPreviewProc
+    property int serial: 0
+    property string expectedUrl: ""
+
+    stdout: StdioCollector { id: fullPreviewStdout; waitForEnd: true }
+    stderr: StdioCollector { id: fullPreviewStderr; waitForEnd: true }
+
+    onExited: function(exitCode, exitStatus) {
+      if (serial !== root.fullPreviewSerial || !root.opened || !root.fullPreviewVisible) return
+      root.fullPreviewLoading = false
+      var path = String(fullPreviewStdout.text || "").trim()
+      if (exitCode === 0 && exitStatus === 0 && expectedUrl
+          && path.charAt(0) === "/") {
+        root.fullPreviewPath = path
+        root.fullPreviewError = ""
+        return
+      }
+      root.fullPreviewPath = ""
+      root.fullPreviewError = String(fullPreviewStderr.text || "").trim()
+        || "This GIF preview could not be loaded."
+    }
+  }
+
+  Process {
+    id: launcherProc
+    property string action: ""
+
+    stdout: StdioCollector { id: launcherStdout; waitForEnd: true }
+    stderr: StdioCollector { id: launcherStderr; waitForEnd: true }
+
+    onExited: function(exitCode, exitStatus) {
+      var finishedAction = action
+      root.launcherChecking = false
+      root.launcherInstalling = false
+      if (!root.opened || !root.shortcutSetup) return
+      if (exitCode !== 0 || exitStatus !== 0) {
+        root.launcherError = String(launcherStderr.text || "").trim()
+          || "Could not update the Omarchy app menu."
+        return
+      }
+      if (finishedAction === "install") {
+        root.launcherInstalled = true
+        root.launcherError = ""
+        return
+      }
+      try {
+        var response = JSON.parse(String(launcherStdout.text || ""))
+        root.launcherInstalled = Boolean(response.installed)
+        root.launcherError = ""
+      } catch (error) {
+        root.launcherError = "The app-menu helper returned an invalid response."
+      }
+    }
+  }
+
+  Process {
     id: shortcutProc
     property int serial: 0
     property bool findAlternative: false
@@ -988,14 +1149,65 @@ Item {
             font.weight: Font.DemiBold
           }
 
-          Text {
+          Row {
             anchors.right: parent.right
             anchors.top: parent.top
-            text: "Type to search    Ctrl+1  Trending    Ctrl+2  Favourites    Powered by KLIPY"
-            color: root.foreground
-            opacity: 0.58
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
+            spacing: Style.spacing.xl
+
+            KeyHint {
+              chord: "Ctrl+1"
+              action: "Trending"
+              foreground: root.foreground
+              compact: true
+            }
+
+            KeyHint {
+              chord: "Ctrl+2"
+              action: "Favorites"
+              foreground: root.foreground
+              compact: true
+            }
+
+            Rectangle {
+              anchors.verticalCenter: parent.verticalCenter
+              width: Math.max(1, Style.space(1))
+              height: Style.space(22)
+              color: Style.normalBorderFor(root.foreground, Color.accent)
+              opacity: 0.72
+            }
+
+            Row {
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.spacing.sm
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "GIFs by"
+                color: root.foreground
+                opacity: 0.5
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: klipyLabel.implicitWidth + Style.spacing.md * 2
+                height: Math.max(Style.space(22), klipyLabel.implicitHeight + Style.spacing.sm * 2)
+                radius: Math.max(Style.space(4), Style.cornerRadius / 2)
+                color: Style.normalFillFor(root.foreground, Color.accent)
+
+                Text {
+                  id: klipyLabel
+                  anchors.centerIn: parent
+                  text: "KLIPY"
+                  color: Color.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.weight: Font.DemiBold
+                  font.letterSpacing: 0.6
+                }
+              }
+            }
           }
 
           Rectangle {
@@ -1099,6 +1311,7 @@ Item {
               selected: index === root.selectedIndex
               previewScript: root.previewScript
               busy: root.copying && index === root.copyingIndex
+              paused: root.fullPreviewVisible
               favourite: {
                 var row = root.resultAt(index)
                 return row ? LoopboxModel.isFavorite(root.state, row) : false
@@ -1106,7 +1319,10 @@ Item {
               foreground: root.foreground
               selectedForeground: root.selectedText
               selectedBackground: root.selectedBackground
-              onHovered: function(itemIndex) { root.selectedIndex = itemIndex }
+              onHovered: function(itemIndex) {
+                root.selectedIndex = itemIndex
+                keyCatcher.forceActiveFocus()
+              }
               onActivated: function(itemIndex) {
                 root.selectedIndex = itemIndex
                 root.copyGif(itemIndex)
@@ -1164,10 +1380,10 @@ Item {
           width: parent.width
           message: root.statusMessage
           error: root.statusError
-        busy: root.loading || root.loadingMore || root.copying
-        foreground: root.foreground
-        shortcut: root.configuredShortcut
-        onShortcutRequested: root.showShortcutSettings()
+          busy: root.loading || root.loadingMore || root.copying
+          foreground: root.foreground
+          shortcut: root.configuredShortcut
+          onShortcutRequested: root.showShortcutSettings()
         }
       }
 
@@ -1191,6 +1407,10 @@ Item {
         available: root.shortcutAvailable
         checking: root.shortcutChecking
         installing: root.shortcutInstalling
+        launcherInstalled: root.launcherInstalled
+        launcherChecking: root.launcherChecking
+        launcherInstalling: root.launcherInstalling
+        launcherError: root.launcherError
         candidateIndex: root.shortcutCandidateIndex
         candidateCount: root.shortcutCandidates.length
         onPreviousRequested: root.chooseShortcut(-1)
@@ -1198,6 +1418,147 @@ Item {
         onInstallRequested: root.installSelectedShortcut()
         onSkipRequested: root.skipShortcutSetup()
         onCancelRequested: root.cancelShortcutSetup()
+        onLauncherInstallRequested: root.installLauncher()
+      }
+
+      Rectangle {
+        id: fullPreviewOverlay
+        anchors.fill: parent
+        z: 10
+        visible: root.fullPreviewVisible
+        color: root.background
+        radius: root.cornerRadius
+        clip: true
+
+        MouseArea {
+          anchors.fill: parent
+          cursorShape: Qt.PointingHandCursor
+          onClicked: {
+            root.closeFullPreview()
+            Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+          }
+        }
+
+        Column {
+          anchors.fill: parent
+          anchors.margins: root.contentMargin
+          spacing: root.contentSpacing
+
+          Item {
+            id: previewHeader
+            width: parent.width
+            height: Math.max(previewTitle.implicitHeight, previewCloseHint.implicitHeight)
+
+            Text {
+              id: previewTitle
+              anchors.left: parent.left
+              anchors.right: previewCloseHint.left
+              anchors.rightMargin: Style.spacing.xl
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.fullPreviewTitle || "GIF preview"
+              textFormat: Text.PlainText
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.title
+              font.weight: Font.DemiBold
+              elide: Text.ElideRight
+            }
+
+            KeyHint {
+              id: previewCloseHint
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              chord: "Space / Esc"
+              action: "Close"
+              foreground: root.foreground
+              compact: true
+            }
+          }
+
+          Rectangle {
+            id: fullPreviewFrame
+            width: parent.width
+            height: parent.height - previewHeader.height - previewHelp.implicitHeight - parent.spacing * 2
+            radius: root.cornerRadius
+            color: Util.alpha(Color.background, 0.94)
+            border.color: Style.normalBorderFor(root.foreground, Color.accent)
+            border.width: Math.max(1, Style.space(1))
+            clip: true
+
+            AnimatedImage {
+              id: fullPreviewImage
+              anchors.fill: parent
+              anchors.margins: Style.spacing.lg
+              // Full previews use only the path returned by the local hardened cache helper.
+              source: root.fullPreviewPath
+              fillMode: Image.PreserveAspectFit
+              asynchronous: true
+              cache: true
+              playing: root.fullPreviewVisible && status === AnimatedImage.Ready
+            }
+
+            Column {
+              anchors.centerIn: parent
+              width: parent.width - Style.space(80)
+              spacing: Style.spacing.lg
+              visible: root.fullPreviewLoading || root.fullPreviewError
+
+              Text {
+                width: parent.width
+                text: root.fullPreviewError ? "" : "󰔟"
+                color: root.fullPreviewError ? Color.urgent : root.foreground
+                opacity: 0.82
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.displayLarge
+                horizontalAlignment: Text.AlignHCenter
+
+                RotationAnimator on rotation {
+                  from: 0
+                  to: 360
+                  duration: 900
+                  loops: Animation.Infinite
+                  running: root.fullPreviewLoading
+                }
+              }
+
+              Text {
+                width: parent.width
+                text: root.fullPreviewError || "Loading full preview"
+                textFormat: Text.PlainText
+                color: root.fullPreviewError ? Color.urgent : root.foreground
+                opacity: 0.78
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.heading
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+              }
+            }
+          }
+
+          Row {
+            id: previewHelp
+            anchors.horizontalCenter: parent.horizontalCenter
+            spacing: Style.spacing.xl
+
+            KeyHint {
+              chord: "Arrows"
+              action: "Browse"
+              foreground: root.foreground
+            }
+
+            KeyHint {
+              chord: "Enter"
+              action: "Copy GIF"
+              foreground: root.foreground
+            }
+
+            KeyHint {
+              chord: "Shift+Enter"
+              action: "Copy link"
+              foreground: root.foreground
+            }
+          }
+        }
       }
     }
   }
