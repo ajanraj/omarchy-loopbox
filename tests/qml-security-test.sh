@@ -36,6 +36,28 @@ grep -F 'fillMode: Image.PreserveAspectFit' "$gif_tile" >/dev/null || {
     printf 'FAIL: GIF cards must letterbox previews instead of cropping or stretching them\n' >&2
     exit 1
 }
+grep -F 'required property real mediaWidth' "$gif_tile" >/dev/null || {
+    printf 'FAIL: GIF cards must receive provider width metadata for bounded aspect-preserving decoding\n' >&2
+    exit 1
+}
+grep -F 'required property real mediaHeight' "$gif_tile" >/dev/null || {
+    printf 'FAIL: GIF cards must receive provider height metadata for bounded aspect-preserving decoding\n' >&2
+    exit 1
+}
+grep -F 'readonly property bool constrainPreviewWidth: previewAspect >= frameAspect' "$gif_tile" >/dev/null || {
+    printf 'FAIL: GIF cards must select one constraining decode dimension from the media aspect ratio\n' >&2
+    exit 1
+}
+if ! awk '
+    /sourceSize\.width:/ { in_width = 1 }
+    in_width && /: 0/ { width_zero = 1; in_width = 0 }
+    /sourceSize\.height:/ { in_height = 1 }
+    in_height && /\? 0 :/ { height_zero = 1; in_height = 0 }
+    END { exit width_zero && height_zero ? 0 : 1 }
+' "$gif_tile"; then
+    printf 'FAIL: GIF decoding must leave one sourceSize dimension unset so Qt preserves aspect ratio\n' >&2
+    exit 1
+fi
 grep -F 'anchors.bottom: caption.top' "$gif_tile" >/dev/null || {
     printf 'FAIL: GIF card captions must occupy a separate row below the preview\n' >&2
     exit 1
