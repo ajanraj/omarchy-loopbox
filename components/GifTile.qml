@@ -11,6 +11,8 @@ Rectangle {
   required property string previewScript
   required property string provider
   required property string resultId
+  required property real mediaWidth
+  required property real mediaHeight
   required property bool selected
   property bool favourite: false
   property bool busy: false
@@ -35,6 +37,11 @@ Rectangle {
     && y <= view.contentY + view.height
   readonly property bool previewError: previewFailed || preview.status === AnimatedImage.Error
   readonly property int captionHeight: Math.max(Style.space(34), label.implicitHeight + Style.spacing.md * 2)
+  readonly property real previewAspect: mediaWidth > 0 && mediaHeight > 0
+    ? mediaWidth / mediaHeight : 1
+  readonly property real frameAspect: imageFrame.width > 0 && imageFrame.height > 0
+    ? imageFrame.width / imageFrame.height : 1
+  readonly property bool constrainPreviewWidth: previewAspect >= frameAspect
 
   function queuePreview() {
     previewSerial += 1
@@ -157,8 +164,13 @@ Rectangle {
     anchors.fill: imageFrame
     // Provider URLs are inputs to preview-gif only. Qt decodes local cache files.
     source: tile.localPreviewPath
-    sourceSize.width: Math.min(Math.ceil(tile.width), 420)
-    sourceSize.height: Math.min(Math.ceil(imageFrame.height), 260)
+    // Set only the constraining dimension so Qt derives the other one from the
+    // GIF itself. Setting both independently resizes every frame to the card's
+    // aspect ratio before PreserveAspectFit can letterbox it.
+    sourceSize.width: tile.constrainPreviewWidth
+      ? Math.min(Math.ceil(imageFrame.width), 420) : 0
+    sourceSize.height: tile.constrainPreviewWidth
+      ? 0 : Math.min(Math.ceil(imageFrame.height), 260)
     fillMode: Image.PreserveAspectFit
     asynchronous: true
     cache: true
