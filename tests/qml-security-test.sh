@@ -113,6 +113,27 @@ grep -F 'wheel.accepted = false' "$gif_tile" >/dev/null || {
     printf 'FAIL: GIF tiles must pass mouse-wheel scrolling through to the grid\n' >&2
     exit 1
 }
+grep -F 'PointerMoveGate {' "$loopbox" >/dev/null || {
+    printf 'FAIL: grid hover must filter synthetic pointer movement from scrolling and tile animation\n' >&2
+    exit 1
+}
+grep -F 'if (!pointerGate.moved(item, mouse)) return' "$loopbox" >/dev/null || {
+    printf 'FAIL: hover selection must require genuine pointer movement\n' >&2
+    exit 1
+}
+if ! awk '
+    /function navigate\(direction\)/ { in_navigate = 1 }
+    in_navigate && /root\.disarmPointer\(\)/ { disarmed = 1 }
+    in_navigate && /^  }/ { exit disarmed ? 0 : 1 }
+    END { if (!in_navigate || !disarmed) exit 1 }
+' "$loopbox"; then
+    printf 'FAIL: keyboard navigation must disarm pointer-driven selection\n' >&2
+    exit 1
+fi
+grep -F 'tile.hovered(tile.index, tileMouse, mouse)' "$gif_tile" >/dev/null || {
+    printf 'FAIL: GIF hover events must include coordinates in their emitting MouseArea\n' >&2
+    exit 1
+}
 grep -F 'var page = Klipy.parsePage(searchStdout.text)' "$loopbox" >/dev/null || {
     printf 'FAIL: the search process must retain the validated provider cursor\n' >&2
     exit 1

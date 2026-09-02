@@ -94,6 +94,7 @@ Item {
     searchInput.text = ""
     root.viewMode = "trending"
     root.selectedIndex = 0
+    root.disarmPointer()
     root.statusMessage = "Checking shortcut"
     root.statusError = false
     root.loading = false
@@ -578,6 +579,7 @@ Item {
   }
 
   function replaceResults(rows) {
+    root.disarmPointer()
     resultModel.clear()
     var count = Math.min(root.maxResults, Array.isArray(rows) ? rows.length : 0)
     for (var i = 0; i < count; i++) root.appendResult(rows[i])
@@ -717,6 +719,7 @@ Item {
 
   function setQuery(nextQuery) {
     var bounded = String(nextQuery || "").slice(0, 120)
+    root.disarmPointer()
     root.query = bounded
     if (searchInput.text !== bounded) searchInput.text = bounded
     root.viewMode = root.query ? "search" : "trending"
@@ -820,12 +823,23 @@ Item {
 
   function navigate(direction) {
     if (resultModel.count === 0) return
+    root.disarmPointer()
     root.selectedIndex = LoopboxModel.navigate(root.selectedIndex, direction, resultModel.count, root.columnCount)
     if (root.selectedIndex >= 0)
       resultGrid.positionViewAtIndex(root.selectedIndex, GridView.Contain)
     keyCatcher.forceActiveFocus()
     if (root.selectedIndex >= resultModel.count - root.columnCount * 2)
       root.loadNextPage()
+  }
+
+  function disarmPointer() {
+    pointerGate.reset()
+  }
+
+  function selectFromPointer(index, item, mouse) {
+    if (!pointerGate.moved(item, mouse)) return
+    if (index < 0 || index >= resultModel.count) return
+    root.selectedIndex = index
   }
 
   function copyGif(index) {
@@ -869,6 +883,11 @@ Item {
   onStateScriptChanged: root.startStateLoad()
 
   ListModel { id: resultModel }
+
+  PointerMoveGate {
+    id: pointerGate
+    referenceItem: card
+  }
 
   Timer {
     id: searchDebounce
@@ -1429,9 +1448,8 @@ Item {
               foreground: root.foreground
               selectedForeground: root.selectedText
               selectedBackground: root.selectedBackground
-              onHovered: function(itemIndex) {
-                root.selectedIndex = itemIndex
-                keyCatcher.forceActiveFocus()
+              onHovered: function(itemIndex, item, mouse) {
+                root.selectFromPointer(itemIndex, item, mouse)
               }
               onActivated: function(itemIndex) {
                 root.selectedIndex = itemIndex

@@ -26,7 +26,7 @@ Rectangle {
   property color selectedBackground: Color.menu.selectedBackground
 
   signal activated(int index)
-  signal hovered(int index)
+  signal hovered(int index, var item, var mouse)
   signal imageFailed(int index)
 
   readonly property var view: GridView.view
@@ -273,11 +273,12 @@ Rectangle {
   }
 
   MouseArea {
+    id: tileMouse
     anchors.fill: parent
     hoverEnabled: true
     scrollGestureEnabled: false
     cursorShape: Qt.PointingHandCursor
-    onPositionChanged: tile.hovered(tile.index)
+    onPositionChanged: function(mouse) { tile.hovered(tile.index, tileMouse, mouse) }
     onClicked: tile.activated(tile.index)
     onWheel: function(wheel) { wheel.accepted = false }
   }
