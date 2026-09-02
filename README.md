@@ -40,7 +40,7 @@ omarchy plugin add https://github.com/ajanraj/omarchy-loopbox.git --enable
 
 Omarchy adds the Loopbox image icon to the right side of the bar by default. An interactive install also lets you choose the bar section. Left-click the icon to open Loopbox. If you decline a shortcut, right-click the icon to show setup later.
 
-The first open offers `Super+Ctrl+Shift+L`. Current Omarchy defaults do not use this chord. Press Enter to accept it. Loopbox checks the live Hyprland binding table first, so custom shortcuts count too. If another action uses the default, Loopbox names the conflict and selects a free alternative. Type any letter to test `Super+Ctrl+Shift` with that key, or use Left and Right to browse suggestions, then press Enter. Loopbox never unbinds or replaces an existing action.
+The first open offers `Super+Ctrl+Shift+L`. Select **Use shortcut** or press Enter to accept it. To choose something else, select **Record shortcut** (or press R), then press the complete combination you want. Super, Ctrl, Alt, and Shift can be used in any combination with standard keys, punctuation, navigation keys, function keys, keypad keys, and common media keys. Loopbox checks the recorded chord against the live Hyprland binding table, including personal shortcuts, and names any conflict. It never unbinds or replaces an existing action.
 
 Omarchy's plugin installer cannot run plugin code or interactive install hooks. Shortcut choice therefore happens inside Loopbox on first launch, after installation. Press Tab to decline a shortcut and keep opening Loopbox from the bar icon. Loopbox remembers that choice; right-click the bar icon if you change your mind.
 
@@ -86,7 +86,7 @@ Open Loopbox and start typing or paste into the already-focused search field. It
 | Ctrl+R | Retry the current search |
 | Escape | Clear the query, then close Loopbox |
 
-During shortcut setup, type a letter to choose its `Super+Ctrl+Shift` chord. Left and Right browse suggestions, Enter confirms, Tab declines future prompts, and Escape closes Loopbox.
+During shortcut setup, press R or select **Record shortcut**, then hold the modifiers and press the final key. Enter saves an available chord, Tab keeps the active shortcut (or declines the first-time prompt), and Escape cancels recording before closing Loopbox.
 
 The bottom-right shortcut control always shows the active chord. Select it to open setup, safely rebind Loopbox, or add it to the Omarchy menu; if no chord is configured, it reads **Set shortcut**. Right-clicking the bar icon opens the same panel.
 

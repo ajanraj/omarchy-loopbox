@@ -93,6 +93,21 @@ free_status=$("$shortcut_helper" status 'SUPER + CTRL + SHIFT + L')
 assert_eq true "$(jq -r '.available' <<<"$free_status")" 'unused shortcut must be available'
 assert_eq false "$(jq -r '.configured' <<<"$free_status")" 'fresh install must not be configured'
 
+arbitrary_status=$("$shortcut_helper" status 'alt + ctrl + space')
+assert_eq 'CTRL + ALT + Space' "$(jq -r '.shortcut' <<<"$arbitrary_status")" 'modifier order and named keys must be canonicalized'
+assert_eq true "$(jq -r '.available' <<<"$arbitrary_status")" 'an unused arbitrary chord must be available'
+
+function_status=$("$shortcut_helper" status 'F12')
+assert_eq 'F12' "$(jq -r '.shortcut' <<<"$function_status")" 'an unmodified function key must be supported'
+
+keypad_status=$("$shortcut_helper" status 'SUPER + kp_3')
+assert_eq 'SUPER + KP_3' "$(jq -r '.shortcut' <<<"$keypad_status")" 'keypad keys must be canonicalized'
+
+printf '%s\n' '[{"submap":"","modmask":12,"key":"Space","description":"Window action"}]' >"$binds_file"
+arbitrary_occupied=$("$shortcut_helper" status 'CTRL + ALT + Space')
+assert_eq false "$(jq -r '.available' <<<"$arbitrary_occupied")" 'collision checks must use the recorded modifier mask'
+assert_eq 'Window action' "$(jq -r '.conflict' <<<"$arbitrary_occupied")" 'arbitrary chord conflicts must name the existing action'
+
 printf '%s\n' '[{"submap":"","modmask":69,"key":"L","description":"Lock notes"}]' >"$binds_file"
 occupied_status=$("$shortcut_helper" status 'SUPER + CTRL + SHIFT + L')
 assert_eq false "$(jq -r '.available' <<<"$occupied_status")" 'occupied shortcut must not be available'
@@ -110,9 +125,27 @@ unowned_loopbox_status=$("$shortcut_helper" status 'SUPER + CTRL + SHIFT + L')
 assert_eq false "$(jq -r '.configured' <<<"$unowned_loopbox_status")" 'an unowned binding named Loopbox must not count as configured'
 assert_eq false "$(jq -r '.available' <<<"$unowned_loopbox_status")" 'an unowned binding named Loopbox must still count as a collision'
 
-run_failure "$test_root/invalid.stdout" "$test_root/invalid.stderr" status 'SUPER + CTRL + L'
-(( RUN_STATUS != 0 )) || fail 'shortcut without Shift must be rejected'
-assert_contains 'Super+Ctrl+Shift' "$test_root/invalid.stderr" 'invalid shortcut must explain the supported shape'
+run_failure "$test_root/invalid-modifier.stdout" "$test_root/invalid-modifier.stderr" status 'SUPER + HYPER + L'
+(( RUN_STATUS != 0 )) || fail 'an unknown modifier must be rejected'
+assert_contains 'unsupported modifier' "$test_root/invalid-modifier.stderr" 'invalid modifiers must explain the supported set'
+
+run_failure "$test_root/duplicate-modifier.stdout" "$test_root/duplicate-modifier.stderr" status 'CTRL + CTRL + K'
+(( RUN_STATUS != 0 )) || fail 'a duplicate modifier must be rejected'
+assert_contains 'appears more than once' "$test_root/duplicate-modifier.stderr" 'duplicate modifiers must have a useful error'
+
+run_failure "$test_root/modifier-only.stdout" "$test_root/modifier-only.stderr" status 'SUPER + CTRL'
+(( RUN_STATUS != 0 )) || fail 'a modifier-only chord must be rejected'
+assert_contains 'non-modifier key' "$test_root/modifier-only.stderr" 'modifier-only chords must explain what is missing'
+
+original_bindings=$(<"$bindings_file")
+run_failure "$test_root/injection.stdout" "$test_root/injection.stderr" install 'SUPER + K\"), o.exec("bad") --'
+(( RUN_STATUS != 0 )) || fail 'Lua metacharacters must be rejected'
+assert_eq "$original_bindings" "$(<"$bindings_file")" 'rejected shortcut text must not modify bindings.lua'
+[[ ! -e $shortcut_file ]] || fail 'rejected shortcut text must not create loopbox.lua'
+
+run_failure "$test_root/control.stdout" "$test_root/control.stderr" status $'SUPER +\nCTRL + K'
+(( RUN_STATUS != 0 )) || fail 'control characters must be rejected'
+assert_contains 'control characters' "$test_root/control.stderr" 'control-character rejection must be explicit'
 
 printf '%s\n' '[{"submap":"","modmask":69,"key":"L","description":"Lock notes"}]' >"$binds_file"
 original_bindings=$(<"$bindings_file")
@@ -150,6 +183,15 @@ configured_status=$("$shortcut_helper" status 'SUPER + CTRL + SHIFT + J')
 assert_eq true "$(jq -r '.configured' <<<"$configured_status")" 'a live Loopbox binding must skip onboarding'
 assert_eq 'SUPER + CTRL + SHIFT + L' "$(jq -r '.currentShortcut' <<<"$configured_status")" 'status must report the active managed shortcut'
 assert_eq true "$(jq -r '.available' <<<"$configured_status")" 'a free replacement chord must be available while Loopbox is configured'
+arbitrary_rebind=$("$shortcut_helper" install 'CTRL + ALT + Space')
+assert_eq false "$(jq -r '.alreadyConfigured' <<<"$arbitrary_rebind")" 'a different arbitrary chord must rebind Loopbox'
+assert_eq 'CTRL + ALT + Space' "$(jq -r '.shortcut' <<<"$arbitrary_rebind")" 'install must return the canonical chord'
+assert_contains 'o.bind("CTRL + ALT + Space", "Loopbox"' "$shortcut_file" 'the managed Lua file must support arbitrary chords'
+
+printf '%s\n' '[{"submap":"","modmask":12,"key":"space","description":"Loopbox"}]' >"$binds_file"
+arbitrary_configured=$("$shortcut_helper" status 'SUPER + CTRL + SHIFT + J')
+assert_eq 'CTRL + ALT + Space' "$(jq -r '.currentShortcut' <<<"$arbitrary_configured")" 'status must reconstruct arbitrary managed chords'
+
 rebind_result=$("$shortcut_helper" install 'SUPER + CTRL + SHIFT + J')
 assert_eq false "$(jq -r '.alreadyConfigured' <<<"$rebind_result")" 'a different free chord must rebind Loopbox'
 assert_contains 'o.bind("SUPER + CTRL + SHIFT + J", "Loopbox"' "$shortcut_file" 'rebinding must replace the managed chord'

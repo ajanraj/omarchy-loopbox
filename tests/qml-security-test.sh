@@ -157,6 +157,26 @@ grep -F 'currentShortcut: root.configuredShortcut' "$loopbox" >/dev/null || {
     printf 'FAIL: shortcut settings must display the active chord\n' >&2
     exit 1
 }
+grep -F 'function recordShortcut(event)' "$loopbox" >/dev/null || {
+    printf 'FAIL: shortcut setup must record the complete key event\n' >&2
+    exit 1
+}
+grep -F 'if (event.modifiers & Qt.MetaModifier) parts.push("SUPER")' "$loopbox" >/dev/null || {
+    printf 'FAIL: the shortcut recorder must preserve the user-held modifier set\n' >&2
+    exit 1
+}
+grep -F 'onRecordRequested: root.startShortcutRecording()' "$loopbox" >/dev/null || {
+    printf 'FAIL: shortcut settings must expose an explicit recording action\n' >&2
+    exit 1
+}
+grep -F '"Record shortcut"' "$shortcut_setup" >/dev/null || {
+    printf 'FAIL: the arbitrary shortcut recorder must be clearly labelled\n' >&2
+    exit 1
+}
+if grep -F 'chooseShortcutLetter' "$loopbox" >/dev/null; then
+    printf 'FAIL: shortcut selection must not append one letter to fixed modifiers\n' >&2
+    exit 1
+fi
 grep -F 'onCancelRequested: root.cancelShortcutSetup()' "$loopbox" >/dev/null || {
     printf 'FAIL: rebinding must allow the active shortcut to be kept\n' >&2
     exit 1

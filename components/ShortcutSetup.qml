@@ -11,21 +11,18 @@ Item {
   property string defaultShortcut: "SUPER + CTRL + SHIFT + L"
   property string shortcut: defaultShortcut
   property string conflict: ""
-  property string defaultConflict: ""
   property string errorMessage: ""
   property string currentShortcut: ""
   property bool available: false
   property bool checking: false
   property bool installing: false
+  property bool recording: false
   property bool launcherInstalled: false
   property bool launcherChecking: false
   property bool launcherInstalling: false
   property string launcherError: ""
-  property int candidateIndex: 0
-  property int candidateCount: 1
 
-  signal previousRequested()
-  signal nextRequested()
+  signal recordRequested()
   signal installRequested()
   signal skipRequested()
   signal cancelRequested()
@@ -38,7 +35,7 @@ Item {
   Column {
     anchors.centerIn: parent
     width: Math.min(parent.width - Style.space(80), Style.space(600))
-    spacing: Style.spacing.xl
+    spacing: Style.spacing.lg
 
     Rectangle {
       anchors.horizontalCenter: parent.horizontalCenter
@@ -70,15 +67,80 @@ Item {
 
     Text {
       width: parent.width
-      text: root.checking
+      text: root.recording
+        ? "Hold the modifiers you want, then press the final key. Loopbox records the complete combination."
+        : root.checking
         ? "Checking this chord against current Omarchy and personal Hyprland bindings."
         : root.currentShortcut
-        ? "Your active shortcut is " + root.displayShortcut(root.currentShortcut) + ". Type a letter or use the arrows to choose a new key."
-        : root.defaultConflict
-        ? root.defaultShortcut + " is already used by " + root.defaultConflict + ". Loopbox will never replace an existing shortcut."
-        : "The default is free. Press Enter to add it, or type any letter to choose another key."
+        ? "Your active shortcut is " + root.displayShortcut(root.currentShortcut) + ". Record any new key combination to replace it."
+        : "Use the suggested shortcut or record your own complete key combination."
       color: root.foreground
       opacity: 0.66
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.body
+      horizontalAlignment: Text.AlignHCenter
+      wrapMode: Text.Wrap
+    }
+
+    Rectangle {
+      anchors.horizontalCenter: parent.horizontalCenter
+      width: Style.space(440)
+      height: Style.space(68)
+      radius: Style.cornerRadius
+      color: root.recording
+        ? Style.hoverFillFor(root.foreground, root.accent)
+        : (root.available ? root.selectedBackground : Style.normalFillFor(root.foreground, root.accent))
+      border.color: root.conflict || root.errorMessage ? Color.urgent : root.accent
+      border.width: root.recording ? Math.max(2, Style.space(2)) : Math.max(1, Style.space(1))
+
+      Column {
+        anchors.centerIn: parent
+        spacing: Style.spacing.xs
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: root.recording ? "RECORDING" : "LAUNCH SHORTCUT"
+          color: root.recording ? root.accent : root.foreground
+          opacity: root.recording ? 1 : 0.56
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          font.weight: Font.DemiBold
+          font.letterSpacing: 0.8
+        }
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: root.recording ? "Press your shortcut now…" : root.displayShortcut(root.shortcut)
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.heading
+          font.weight: Font.DemiBold
+          font.letterSpacing: 0.5
+        }
+      }
+
+      MouseArea {
+        id: shortcutMouse
+        anchors.fill: parent
+        enabled: !root.checking && !root.installing
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: root.recordRequested()
+      }
+    }
+
+    Text {
+      width: parent.width
+      text: root.errorMessage
+        || (root.recording ? "Hold any modifiers, press a final key · Escape cancels"
+        : (root.checking ? "Checking current Hyprland bindings"
+        : (root.installing ? "Adding shortcut and reloading Hyprland"
+        : (root.conflict ? root.conflict + " already uses this shortcut. Record another combination."
+        : (root.available
+          ? "This shortcut is available. Save it when you are ready."
+          : "Record any modifier-and-key combination.")))))
+      color: root.errorMessage || root.conflict ? Color.urgent : root.foreground
+      opacity: root.errorMessage || root.conflict ? 1 : 0.62
       font.family: root.fontFamily
       font.pixelSize: Style.font.body
       horizontalAlignment: Text.AlignHCenter
@@ -90,97 +152,63 @@ Item {
       spacing: Style.spacing.lg
 
       Rectangle {
-        width: Style.space(44)
-        height: Style.space(44)
+        width: Style.space(210)
+        height: Style.space(48)
         radius: Style.cornerRadius
-        color: previousMouse.containsMouse ? Style.hoverFillFor(root.foreground, root.accent) : "transparent"
-        opacity: root.candidateCount > 1 ? 1 : 0.35
-
-        Text {
-          anchors.centerIn: parent
-          text: "\uf053"
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
-        }
-
-        MouseArea {
-          id: previousMouse
-          anchors.fill: parent
-          enabled: root.candidateCount > 1 && !root.checking && !root.installing
-          hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
-          onClicked: root.previousRequested()
-        }
-      }
-
-      Rectangle {
-        width: Style.space(360)
-        height: Style.space(58)
-        radius: Style.cornerRadius
-        color: root.available ? root.selectedBackground : Style.normalFillFor(root.foreground, root.accent)
-        border.color: root.conflict || root.errorMessage ? Color.urgent : root.accent
+        color: recordMouse.containsMouse && recordMouse.enabled
+          ? Style.hoverFillFor(root.foreground, root.accent)
+          : Style.normalFillFor(root.foreground, root.accent)
+        border.color: root.recording ? root.accent : Style.normalBorderFor(root.foreground, root.accent)
         border.width: Math.max(1, Style.space(1))
 
         Text {
           anchors.centerIn: parent
-          text: root.displayShortcut(root.shortcut)
-          color: root.foreground
+          text: root.recording ? "Recording…" : "Record shortcut"
+          color: root.recording || recordMouse.containsMouse ? root.accent : root.foreground
           font.family: root.fontFamily
-          font.pixelSize: Style.font.heading
+          font.pixelSize: Style.font.body
           font.weight: Font.DemiBold
-          font.letterSpacing: 0.5
         }
 
         MouseArea {
+          id: recordMouse
           anchors.fill: parent
-          enabled: root.available && !root.checking && !root.installing
-          cursorShape: Qt.PointingHandCursor
-          onClicked: root.installRequested()
+          enabled: !root.checking && !root.installing
+          hoverEnabled: true
+          cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+          onClicked: root.recordRequested()
         }
       }
 
       Rectangle {
-        width: Style.space(44)
-        height: Style.space(44)
+        width: Style.space(210)
+        height: Style.space(48)
         radius: Style.cornerRadius
-        color: nextMouse.containsMouse ? Style.hoverFillFor(root.foreground, root.accent) : "transparent"
-        opacity: root.candidateCount > 1 ? 1 : 0.35
+        color: root.available && saveMouse.containsMouse
+          ? Style.hoverFillFor(root.foreground, root.accent)
+          : (root.available ? root.selectedBackground : Style.normalFillFor(root.foreground, root.accent))
+        border.color: root.available ? root.accent : Style.normalBorderFor(root.foreground, root.accent)
+        border.width: Math.max(1, Style.space(1))
+        opacity: root.available && !root.recording ? 1 : 0.46
 
         Text {
           anchors.centerIn: parent
-          text: "\uf054"
+          text: root.currentShortcut ? "Save shortcut" : "Use shortcut"
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
+          font.weight: Font.DemiBold
         }
 
         MouseArea {
-          id: nextMouse
+          id: saveMouse
           anchors.fill: parent
-          enabled: root.candidateCount > 1 && !root.checking && !root.installing
+          enabled: root.available && !root.recording && !root.checking && !root.installing
           hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
-          onClicked: root.nextRequested()
+          cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+          onClicked: root.installRequested()
         }
       }
-    }
-
-    Text {
-      width: parent.width
-      text: root.errorMessage
-        || (root.checking ? "Checking current Hyprland bindings"
-        : (root.installing ? "Adding shortcut and reloading Hyprland"
-        : (root.conflict ? root.conflict + " already uses this shortcut. Type another letter."
-        : (root.available
-          ? (root.currentShortcut ? "Enter  Save shortcut     Type a letter  Pick key     Tab  Keep current" : "Enter  Use shortcut     Type a letter  Pick key     Tab  Not now")
-          : "Type a letter to choose another shortcut"))))
-      color: root.errorMessage || root.conflict ? Color.urgent : root.foreground
-      opacity: root.errorMessage || root.conflict ? 1 : 0.62
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.body
-      horizontalAlignment: Text.AlignHCenter
-      wrapMode: Text.Wrap
     }
 
     Rectangle {

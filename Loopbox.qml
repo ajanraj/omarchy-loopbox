@@ -40,12 +40,11 @@ Item {
   property string pendingStateText: ""
   property bool shortcutSetup: false
   property int shortcutSerial: 0
-  property int shortcutCandidateIndex: 0
   property bool shortcutAvailable: false
   property bool shortcutChecking: false
   property bool shortcutInstalling: false
+  property bool shortcutRecording: false
   property string shortcutConflict: ""
-  property string shortcutDefaultConflict: ""
   property string shortcutError: ""
   property string configuredShortcut: ""
   property string customShortcut: ""
@@ -62,13 +61,6 @@ Item {
   property string fullPreviewTitle: ""
   property string fullPreviewError: ""
   property int fullPreviewSerial: 0
-  property var shortcutCandidates: [
-    "SUPER + CTRL + SHIFT + L",
-    "SUPER + CTRL + SHIFT + J",
-    "SUPER + CTRL + SHIFT + U",
-    "SUPER + CTRL + SHIFT + M",
-    "SUPER + CTRL + SHIFT + C"
-  ]
 
   readonly property string pluginDirectory: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
   readonly property string copyScript: pluginDirectory + "/scripts/copy-gif"
@@ -76,7 +68,8 @@ Item {
   readonly property string shortcutScript: pluginDirectory + "/scripts/shortcut"
   readonly property string launcherScript: pluginDirectory + "/scripts/launcher"
   readonly property string stateScript: pluginDirectory ? pluginDirectory + "/scripts/state" : ""
-  readonly property string selectedShortcut: customShortcut || shortcutCandidates[shortcutCandidateIndex] || shortcutCandidates[0]
+  readonly property string defaultShortcut: "SUPER + CTRL + SHIFT + L"
+  readonly property string selectedShortcut: customShortcut || defaultShortcut
   readonly property int pageSize: 24
   readonly property int maxResults: 96
   readonly property int columnCount: 4
@@ -121,14 +114,15 @@ Item {
   function beginShortcutSetup() {
     root.shortcutSetup = true
     root.shortcutSerial += 1
-    root.shortcutCandidateIndex = 0
     root.shortcutAvailable = false
     root.shortcutChecking = false
     root.shortcutInstalling = false
+    root.shortcutRecording = false
     root.shortcutConflict = ""
-    root.shortcutDefaultConflict = ""
     root.shortcutError = ""
-    root.customShortcut = ""
+    root.customShortcut = root.forceShortcutSetup && root.configuredShortcut
+      ? root.configuredShortcut
+      : ""
     root.shortcutInstallPending = false
     root.shortcutSeeded = false
     root.launcherChecking = false
@@ -141,7 +135,7 @@ Item {
       return
     }
     root.checkLauncherStatus()
-    root.checkShortcutCandidate(true)
+    root.checkShortcutCandidate()
   }
 
   function checkLauncherStatus() {
@@ -163,14 +157,13 @@ Item {
     launcherProc.running = true
   }
 
-  function checkShortcutCandidate(findAlternative) {
+  function checkShortcutCandidate() {
     if (!root.opened || !root.shortcutSetup || shortcutProc.running) return
     root.shortcutAvailable = false
     root.shortcutChecking = true
     root.shortcutConflict = ""
     root.shortcutError = ""
     shortcutProc.serial = root.shortcutSerial
-    shortcutProc.findAlternative = Boolean(findAlternative)
     shortcutProc.action = "status"
     shortcutProc.command = root.forceShortcutSetup
       ? [root.shortcutScript, "status", root.selectedShortcut, "--force"]
@@ -178,20 +171,147 @@ Item {
     shortcutProc.running = true
   }
 
-  function chooseShortcut(offset) {
+  function startShortcutRecording() {
     if (root.shortcutChecking || root.shortcutInstalling || shortcutProc.running) return
-    var count = root.shortcutCandidates.length
-    root.customShortcut = ""
-    root.shortcutCandidateIndex = (root.shortcutCandidateIndex + offset + count) % count
-    root.checkShortcutCandidate(false)
+    root.shortcutRecording = true
+    root.shortcutConflict = ""
+    root.shortcutError = ""
+    root.shortcutAvailable = false
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
-  function chooseShortcutLetter(letter) {
-    if (root.shortcutChecking || root.shortcutInstalling || shortcutProc.running) return
-    var key = String(letter || "").toUpperCase()
-    if (!/^[A-Z]$/.test(key)) return
-    root.customShortcut = "SUPER + CTRL + SHIFT + " + key
-    root.checkShortcutCandidate(false)
+  function cancelShortcutRecording() {
+    root.shortcutRecording = false
+    root.shortcutError = ""
+    root.checkShortcutCandidate()
+  }
+
+  function modifierOnlyKey(key) {
+    return key === Qt.Key_Shift || key === Qt.Key_Control || key === Qt.Key_Alt
+      || key === Qt.Key_Meta || key === Qt.Key_AltGr
+  }
+
+  function shortcutKeyName(event) {
+    var key = event.key
+    var text = String(event.text || "")
+    var keypad = (event.modifiers & Qt.KeypadModifier) !== 0
+
+    if (key >= Qt.Key_A && key <= Qt.Key_Z) return String.fromCharCode(key)
+    if (key >= Qt.Key_0 && key <= Qt.Key_9) {
+      var digit = String.fromCharCode(key)
+      return keypad ? "KP_" + digit : digit
+    }
+    if (key >= Qt.Key_F1 && key <= Qt.Key_F35) return "F" + (key - Qt.Key_F1 + 1)
+
+    if (keypad) {
+      if (key === Qt.Key_Enter || key === Qt.Key_Return) return "KP_Enter"
+      if (key === Qt.Key_Plus) return "KP_Add"
+      if (key === Qt.Key_Minus) return "KP_Subtract"
+      if (key === Qt.Key_Asterisk) return "KP_Multiply"
+      if (key === Qt.Key_Slash) return "KP_Divide"
+      if (key === Qt.Key_Period || key === Qt.Key_Comma) return "KP_Decimal"
+    }
+
+    switch (key) {
+    case Qt.Key_Escape: return "Escape"
+    case Qt.Key_Tab:
+    case Qt.Key_Backtab: return "Tab"
+    case Qt.Key_Backspace: return "Backspace"
+    case Qt.Key_Return: return "Return"
+    case Qt.Key_Enter: return "Enter"
+    case Qt.Key_Insert: return "Insert"
+    case Qt.Key_Delete: return "Delete"
+    case Qt.Key_Pause: return "Pause"
+    case Qt.Key_Print: return "Print"
+    case Qt.Key_SysReq: return "SysReq"
+    case Qt.Key_Clear: return "Clear"
+    case Qt.Key_Home: return "Home"
+    case Qt.Key_End: return "End"
+    case Qt.Key_Left: return "Left"
+    case Qt.Key_Up: return "Up"
+    case Qt.Key_Right: return "Right"
+    case Qt.Key_Down: return "Down"
+    case Qt.Key_PageUp: return "PageUp"
+    case Qt.Key_PageDown: return "PageDown"
+    case Qt.Key_Space: return "Space"
+    case Qt.Key_CapsLock: return "CapsLock"
+    case Qt.Key_NumLock: return "NumLock"
+    case Qt.Key_ScrollLock: return "ScrollLock"
+    case Qt.Key_Menu: return "Menu"
+    case Qt.Key_Help: return "Help"
+    case Qt.Key_Minus:
+    case Qt.Key_Underscore: return "minus"
+    case Qt.Key_Equal:
+    case Qt.Key_Plus: return "equal"
+    case Qt.Key_BracketLeft:
+    case Qt.Key_BraceLeft: return "bracketleft"
+    case Qt.Key_BracketRight:
+    case Qt.Key_BraceRight: return "bracketright"
+    case Qt.Key_Backslash:
+    case Qt.Key_Bar: return "backslash"
+    case Qt.Key_Semicolon:
+    case Qt.Key_Colon: return "semicolon"
+    case Qt.Key_Apostrophe:
+    case Qt.Key_QuoteDbl: return "apostrophe"
+    case Qt.Key_Comma:
+    case Qt.Key_Less: return "comma"
+    case Qt.Key_Period:
+    case Qt.Key_Greater: return "period"
+    case Qt.Key_Slash:
+    case Qt.Key_Question: return "slash"
+    case Qt.Key_QuoteLeft:
+    case Qt.Key_AsciiTilde: return "grave"
+    case Qt.Key_Exclam: return "1"
+    case Qt.Key_At: return "2"
+    case Qt.Key_NumberSign: return "3"
+    case Qt.Key_Dollar: return "4"
+    case Qt.Key_Percent: return "5"
+    case Qt.Key_AsciiCircum: return "6"
+    case Qt.Key_Ampersand: return "7"
+    case Qt.Key_Asterisk: return "8"
+    case Qt.Key_ParenLeft: return "9"
+    case Qt.Key_ParenRight: return "0"
+    case Qt.Key_VolumeDown: return "XF86AudioLowerVolume"
+    case Qt.Key_VolumeMute: return "XF86AudioMute"
+    case Qt.Key_VolumeUp: return "XF86AudioRaiseVolume"
+    case Qt.Key_MediaPlay: return "XF86AudioPlay"
+    case Qt.Key_MediaStop: return "XF86AudioStop"
+    case Qt.Key_MediaPrevious: return "XF86AudioPrev"
+    case Qt.Key_MediaNext: return "XF86AudioNext"
+    case Qt.Key_MediaPause: return "XF86AudioPause"
+    case Qt.Key_MediaTogglePlayPause: return "XF86AudioPlay"
+    case Qt.Key_MonBrightnessUp: return "XF86MonBrightnessUp"
+    case Qt.Key_MonBrightnessDown: return "XF86MonBrightnessDown"
+    case Qt.Key_MicMute: return "XF86AudioMicMute"
+    }
+
+    if (/^[A-Za-z0-9]$/.test(text)) return text.toUpperCase()
+    return ""
+  }
+
+  function recordShortcut(event) {
+    if (root.modifierOnlyKey(event.key)) return
+    if (event.key === Qt.Key_Escape && event.modifiers === Qt.NoModifier) {
+      root.cancelShortcutRecording()
+      return
+    }
+
+    var keyName = root.shortcutKeyName(event)
+    if (!keyName) {
+      root.shortcutError = "That key cannot be represented safely. Try another key."
+      return
+    }
+
+    var parts = []
+    if (event.modifiers & Qt.MetaModifier) parts.push("SUPER")
+    if (event.modifiers & Qt.ControlModifier) parts.push("CTRL")
+    if (event.modifiers & Qt.AltModifier) parts.push("ALT")
+    if (event.modifiers & Qt.ShiftModifier) parts.push("SHIFT")
+    parts.push(keyName)
+
+    root.customShortcut = parts.join(" + ")
+    root.shortcutRecording = false
+    root.checkShortcutCandidate()
   }
 
   function installSelectedShortcut() {
@@ -202,9 +322,9 @@ Item {
     if (!root.shortcutAvailable || root.shortcutInstalling || shortcutProc.running) return
     root.shortcutInstallPending = false
     root.shortcutInstalling = true
+    root.shortcutRecording = false
     root.shortcutError = ""
     shortcutProc.serial = root.shortcutSerial
-    shortcutProc.findAlternative = false
     shortcutProc.action = "install"
     shortcutProc.command = [root.shortcutScript, "install", root.selectedShortcut]
     shortcutProc.running = true
@@ -214,7 +334,6 @@ Item {
     if (root.shortcutInstalling || shortcutProc.running) return
     root.shortcutChecking = true
     shortcutProc.serial = root.shortcutSerial
-    shortcutProc.findAlternative = false
     shortcutProc.action = "skip"
     shortcutProc.command = [root.shortcutScript, "skip"]
     shortcutProc.running = true
@@ -289,21 +408,19 @@ Item {
         event.accepted = true
         return
       }
-      if (event.key === Qt.Key_Escape) {
+      if (root.shortcutRecording) {
+        root.recordShortcut(event)
+      } else if (event.key === Qt.Key_Escape) {
         root.dismiss()
-      } else if (event.key === Qt.Key_Left) {
-        root.chooseShortcut(-1)
-      } else if (event.key === Qt.Key_Right) {
-        root.chooseShortcut(1)
       } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
         root.installSelectedShortcut()
       } else if (event.key === Qt.Key_Tab) {
         if (root.configuredShortcut) root.cancelShortcutSetup()
         else root.skipShortcutSetup()
-      } else if (!control && !shift
+      } else if (event.key === Qt.Key_R && !control && !shift
                  && !(event.modifiers & (Qt.AltModifier | Qt.MetaModifier))
-                 && event.text && /^[a-zA-Z]$/.test(event.text)) {
-        root.chooseShortcutLetter(event.text)
+      ) {
+        root.startShortcutRecording()
       }
       event.accepted = true
       return
@@ -997,7 +1114,6 @@ Item {
   Process {
     id: shortcutProc
     property int serial: 0
-    property bool findAlternative: false
     property string action: ""
 
     stdout: StdioCollector { id: shortcutStdout; waitForEnd: true }
@@ -1052,27 +1168,21 @@ Item {
           root.shortcutSeeded = true
           if (root.configuredShortcut && root.selectedShortcut !== root.configuredShortcut) {
             root.customShortcut = root.configuredShortcut
-            Qt.callLater(function() { root.checkShortcutCandidate(false) })
+            Qt.callLater(function() { root.checkShortcutCandidate() })
             return
           }
         }
       }
 
+      root.customShortcut = String(response.shortcut || root.selectedShortcut)
       root.shortcutAvailable = Boolean(response.available)
       root.shortcutConflict = String(response.conflict || "")
       root.shortcutError = ""
 
-      if (!root.shortcutAvailable && findAlternative) {
-        if (root.shortcutCandidateIndex === 0) {
-          root.shortcutDefaultConflict = root.shortcutConflict || "another action"
-          root.shortcutInstallPending = false
-        }
-        if (root.shortcutCandidateIndex + 1 < root.shortcutCandidates.length) {
-          root.shortcutCandidateIndex += 1
-          Qt.callLater(function() { root.checkShortcutCandidate(true) })
-        }
-      } else if (root.shortcutAvailable && root.shortcutInstallPending) {
+      if (root.shortcutAvailable && root.shortcutInstallPending) {
         Qt.callLater(function() { root.installSelectedShortcut() })
+      } else if (!root.shortcutAvailable) {
+        root.shortcutInstallPending = false
       }
     }
   }
@@ -1398,23 +1508,20 @@ Item {
         accent: Color.accent
         selectedBackground: root.selectedBackground
         fontFamily: root.fontFamily
-        defaultShortcut: root.shortcutCandidates[0]
+        defaultShortcut: root.defaultShortcut
         shortcut: root.selectedShortcut
         conflict: root.shortcutConflict
-        defaultConflict: root.shortcutDefaultConflict
         errorMessage: root.shortcutError
         currentShortcut: root.configuredShortcut
         available: root.shortcutAvailable
         checking: root.shortcutChecking
         installing: root.shortcutInstalling
+        recording: root.shortcutRecording
         launcherInstalled: root.launcherInstalled
         launcherChecking: root.launcherChecking
         launcherInstalling: root.launcherInstalling
         launcherError: root.launcherError
-        candidateIndex: root.shortcutCandidateIndex
-        candidateCount: root.shortcutCandidates.length
-        onPreviousRequested: root.chooseShortcut(-1)
-        onNextRequested: root.chooseShortcut(1)
+        onRecordRequested: root.startShortcutRecording()
         onInstallRequested: root.installSelectedShortcut()
         onSkipRequested: root.skipShortcutSetup()
         onCancelRequested: root.cancelShortcutSetup()
