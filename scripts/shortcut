@@ -30,14 +30,135 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "'$1' is required. Install it and try again."
 }
 
-parse_shortcut() {
-    local shortcut=${1:-}
-    if [[ $shortcut =~ ^SUPER[[:space:]]\+[[:space:]]CTRL[[:space:]]\+[[:space:]]SHIFT[[:space:]]\+[[:space:]]([A-Z])$ ]]; then
-        shortcut_key=${BASH_REMATCH[1]}
-        shortcut_mask=69
+canonicalize_key() {
+    local key=${1:-}
+    local lower
+    [[ ${#key} -le 64 && $key =~ ^[A-Za-z0-9_]+$ ]] || return 1
+    lower=${key,,}
+
+    if [[ $key =~ ^[A-Za-z]$ ]]; then
+        canonical_key=${key^^}
         return
     fi
-    fail "unsupported shortcut '$shortcut'. Choose Super+Ctrl+Shift and one letter."
+    if [[ $lower =~ ^f([1-9]|[12][0-9]|3[0-5])$ ]]; then
+        canonical_key=${lower^^}
+        return
+    fi
+    if [[ $lower =~ ^kp_([0-9]|enter|add|subtract|multiply|divide|decimal)$ ]]; then
+        case ${BASH_REMATCH[1]} in
+            enter) canonical_key="KP_Enter" ;;
+            add) canonical_key="KP_Add" ;;
+            subtract) canonical_key="KP_Subtract" ;;
+            multiply) canonical_key="KP_Multiply" ;;
+            divide) canonical_key="KP_Divide" ;;
+            decimal) canonical_key="KP_Decimal" ;;
+            *) canonical_key="KP_${BASH_REMATCH[1]}" ;;
+        esac
+        return
+    fi
+
+    case $lower in
+        escape) canonical_key="Escape" ;;
+        tab) canonical_key="Tab" ;;
+        backspace) canonical_key="Backspace" ;;
+        return) canonical_key="Return" ;;
+        enter) canonical_key="Enter" ;;
+        insert) canonical_key="Insert" ;;
+        delete) canonical_key="Delete" ;;
+        pause) canonical_key="Pause" ;;
+        print) canonical_key="Print" ;;
+        sysreq) canonical_key="SysReq" ;;
+        clear) canonical_key="Clear" ;;
+        home) canonical_key="Home" ;;
+        end) canonical_key="End" ;;
+        left) canonical_key="Left" ;;
+        up) canonical_key="Up" ;;
+        right) canonical_key="Right" ;;
+        down) canonical_key="Down" ;;
+        pageup) canonical_key="PageUp" ;;
+        pagedown) canonical_key="PageDown" ;;
+        space) canonical_key="Space" ;;
+        capslock) canonical_key="CapsLock" ;;
+        numlock) canonical_key="NumLock" ;;
+        scrolllock) canonical_key="ScrollLock" ;;
+        menu) canonical_key="Menu" ;;
+        help) canonical_key="Help" ;;
+        minus|equal|bracketleft|bracketright|backslash|semicolon|apostrophe|comma|period|slash|grave)
+            canonical_key=$lower
+            ;;
+        *) canonical_key=$key ;;
+    esac
+}
+
+format_shortcut() {
+    local mask=$1
+    local key=$2
+    local parts=()
+    (( mask & 64 )) && parts+=("SUPER")
+    (( mask & 4 )) && parts+=("CTRL")
+    (( mask & 8 )) && parts+=("ALT")
+    (( mask & 1 )) && parts+=("SHIFT")
+    parts+=("$key")
+    local joined
+    printf -v joined ' + %s' "${parts[@]}"
+    shortcut_canonical=${joined:3}
+}
+
+parse_shortcut() {
+    local shortcut=${1:-}
+    local token trimmed key modifier
+    local -a tokens=()
+    local -A seen=()
+
+    [[ -n $shortcut && ${#shortcut} -le 128 ]] ||
+        fail "the shortcut must contain at most 128 characters."
+    [[ ! $shortcut =~ [[:cntrl:]] ]] ||
+        fail "the shortcut contains unsupported control characters."
+
+    IFS='+' read -r -a tokens <<<"$shortcut"
+    (( ${#tokens[@]} >= 1 && ${#tokens[@]} <= 5 )) ||
+        fail "record a final key with up to four modifiers."
+
+    shortcut_mask=0
+    for (( index = 0; index < ${#tokens[@]} - 1; index++ )); do
+        token=${tokens[index]}
+        trimmed=${token#"${token%%[![:space:]]*}"}
+        trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
+        modifier=${trimmed^^}
+        case $modifier in
+            SUPER) (( shortcut_mask |= 64 )) ;;
+            CTRL) (( shortcut_mask |= 4 )) ;;
+            ALT) (( shortcut_mask |= 8 )) ;;
+            SHIFT) (( shortcut_mask |= 1 )) ;;
+            *) fail "unsupported modifier '$trimmed'. Use Super, Ctrl, Alt, or Shift." ;;
+        esac
+        [[ ! ${seen[$modifier]+set} ]] || fail "modifier '$trimmed' appears more than once."
+        seen[$modifier]=1
+    done
+
+    token=${tokens[${#tokens[@]} - 1]}
+    key=${token#"${token%%[![:space:]]*}"}
+    key=${key%"${key##*[![:space:]]}"}
+    [[ -n $key ]] || fail "record a non-modifier key to finish the shortcut."
+    case ${key^^} in
+        SUPER|CTRL|ALT|SHIFT) fail "record a non-modifier key to finish the shortcut." ;;
+    esac
+    canonicalize_key "$key" || fail "unsupported key '$key'. Record a standard keyboard, function, keypad, or media key."
+    shortcut_key=$canonical_key
+    format_shortcut "$shortcut_mask" "$shortcut_key"
+}
+
+binding_shortcut() {
+    local binding=$1
+    local mask key
+    shortcut_canonical=""
+    [[ $binding != null ]] || return 0
+    mask=$(jq -r 'if ((.modmask // null) | type) == "number" then .modmask else -1 end' <<<"$binding")
+    key=$(jq -r '.key // ""' <<<"$binding")
+    [[ $mask =~ ^[0-9]+$ ]] || return 0
+    (( (mask & ~77) == 0 )) || return 0
+    canonicalize_key "$key" || return 0
+    format_shortcut "$mask" "$canonical_key"
 }
 
 read_bindings() {
@@ -68,7 +189,7 @@ conflicting_binding() {
       [.[] | select(
         (.submap // "") == ""
         and .modmask == $mask
-        and ((.key // "") | ascii_upcase) == $key
+        and ((.key // "") | ascii_downcase) == ($key | ascii_downcase)
       )][0] // null
     '
 }
@@ -78,18 +199,15 @@ print_status() {
     local force=${2:-false}
     local binds_json configured configured_shortcut conflict conflict_name skipped available
     parse_shortcut "$shortcut"
+    shortcut=$shortcut_canonical
     if ! skipped=$("$state_helper" shortcut-status 2>&1); then
         fail "$skipped"
     fi
     binds_json=$(read_bindings)
     configured=$(configured_binding <<<"$binds_json")
-    configured_shortcut=$(jq -r '
-      if . == null then ""
-      elif .modmask == 69 and ((.key // "") | ascii_upcase | test("^[A-Z]$"))
-      then "SUPER + CTRL + SHIFT + " + ((.key // "") | ascii_upcase)
-      else ""
-      end
-    ' <<<"$configured")
+    binding_shortcut "$configured"
+    configured_shortcut=$shortcut_canonical
+    parse_shortcut "$shortcut"
     if [[ $force != true && $skipped == true && $configured == null ]]; then
         jq -cn --arg shortcut "$shortcut" '{configured: false, skipped: true, shortcut: $shortcut, currentShortcut: "", available: false, conflict: ""}'
         return
@@ -172,18 +290,15 @@ install_shortcut() {
     local shortcut_existed=false
 
     parse_shortcut "$shortcut"
+    shortcut=$shortcut_canonical
     [[ -f $bindings_file ]] ||
         fail "could not find $bindings_file. Create the Omarchy Hyprland config and try again."
 
     binds_json=$(read_bindings)
     configured=$(configured_binding <<<"$binds_json")
-    configured_shortcut=$(jq -r '
-      if . == null then ""
-      elif .modmask == 69 and ((.key // "") | ascii_upcase | test("^[A-Z]$"))
-      then "SUPER + CTRL + SHIFT + " + ((.key // "") | ascii_upcase)
-      else ""
-      end
-    ' <<<"$configured")
+    binding_shortcut "$configured"
+    configured_shortcut=$shortcut_canonical
+    parse_shortcut "$shortcut"
     if [[ $configured != null && $configured_shortcut == "$shortcut" ]]; then
         jq -cn --arg shortcut "$shortcut" '{installed: true, alreadyConfigured: true, shortcut: $shortcut}'
         return
@@ -327,7 +442,7 @@ case ${1:-status} in
         print_status "${2:-$default_shortcut}" "$( [[ ${3:-} == "--force" ]] && printf true || printf false )"
         ;;
     install)
-        [[ $# -eq 2 ]] || fail "usage: shortcut install 'SUPER + CTRL + SHIFT + L'"
+        [[ $# -eq 2 ]] || fail "usage: shortcut install 'SUPER + ALT + Space'"
         install_shortcut "$2"
         ;;
     remove)
