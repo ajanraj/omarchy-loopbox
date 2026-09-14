@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
+import errno
 import os
 import pathlib
 import select
+import signal
 import stat
 import sys
 
@@ -17,25 +19,37 @@ def fail(message):
 def validate_path(raw_path):
     path = pathlib.Path(raw_path)
     try:
-        info = path.lstat()
+        handle = open(
+            path, "rb", opener=lambda p, flags: os.open(p, flags | os.O_NOFOLLOW)
+        )
     except OSError as error:
-        fail(f"cannot inspect GIF: {error}")
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-        fail("GIF must be a regular file and not a symbolic link")
-    if info.st_uid != os.getuid():
-        fail("GIF must be owned by the current user")
-    if info.st_size <= 0 or info.st_size > MAX_BYTES:
-        fail("GIF must be between 1 byte and 15 MiB")
+        if error.errno == errno.ELOOP:
+            fail("GIF must be a regular file and not a symbolic link")
+        fail(f"cannot open GIF: {error}")
     try:
-        with path.open("rb") as handle:
-            if handle.read(6) not in (b"GIF87a", b"GIF89a"):
-                fail("file does not contain GIF87a or GIF89a data")
-    except OSError as error:
-        fail(f"cannot read GIF: {error}")
-    return path.resolve(strict=True)
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            fail("GIF must be a regular file and not a symbolic link")
+        if info.st_uid != os.getuid():
+            fail("GIF must be owned by the current user")
+        if info.st_nlink != 1:
+            fail("GIF must not be hard-linked to another path")
+        if info.st_size <= 0 or info.st_size > MAX_BYTES:
+            fail("GIF must be between 1 byte and 15 MiB")
+        try:
+            gif_bytes = handle.read(MAX_BYTES + 1)
+        except OSError as error:
+            fail(f"cannot read GIF: {error}")
+    finally:
+        handle.close()
+    if len(gif_bytes) > MAX_BYTES:
+        fail("GIF must be between 1 byte and 15 MiB")
+    if gif_bytes[:6] not in (b"GIF87a", b"GIF89a"):
+        fail("file does not contain GIF87a or GIF89a data")
+    return path.resolve(strict=True), gif_bytes
 
 
-def claim_clipboard(path, ready_fd):
+def claim_clipboard(path, gif_bytes, ready_fd):
     try:
         import gi
 
@@ -48,7 +62,6 @@ def claim_clipboard(path, ready_fd):
         if display is None:
             raise RuntimeError("could not connect to the Wayland display")
 
-        gif_bytes = path.read_bytes()
         gif_file = Gio.File.new_for_path(str(path))
         file_list = Gdk.FileList.new_from_list([gif_file])
         providers = [
@@ -83,7 +96,7 @@ def claim_clipboard(path, ready_fd):
         raise SystemExit(1)
 
 
-def start_owner(path):
+def start_owner(path, gif_bytes):
     read_fd, write_fd = os.pipe()
     child_pid = os.fork()
     if child_pid == 0:
@@ -92,13 +105,18 @@ def start_owner(path):
             os.setsid()
         except OSError:
             pass
-        claim_clipboard(path, write_fd)
+        claim_clipboard(path, gif_bytes, write_fd)
         os._exit(0)
 
     os.close(write_fd)
     ready, _, _ = select.select([read_fd], [], [], 5.0)
     if not ready:
         os.close(read_fd)
+        try:
+            os.kill(child_pid, signal.SIGKILL)
+            os.waitpid(child_pid, 0)
+        except OSError:
+            pass
         fail("clipboard owner did not start within five seconds")
     response = os.read(read_fd, 1024).decode("utf-8", "replace").strip()
     os.close(read_fd)
@@ -113,7 +131,7 @@ def start_owner(path):
 def main():
     if len(sys.argv) != 2:
         fail("usage: clipboard-gif <path-to-gif>")
-    start_owner(validate_path(sys.argv[1]))
+    start_owner(*validate_path(sys.argv[1]))
 
 
 if __name__ == "__main__":

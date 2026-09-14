@@ -157,7 +157,7 @@ prune_cache() {
     local total=0
     local count=0
 
-    mapfile -d '' entries < <(find "$cache_dir" -maxdepth 1 -type f -name '*.gif' -printf '%T@ %p\0' | sort -z -n)
+    mapfile -d '' entries < <(find "$cache_dir" -maxdepth 1 -type f \( -name '*.gif' -o -name '*.png' \) -printf '%T@ %p\0' | sort -z -n)
 
     for entry in "${entries[@]}"; do
         file=${entry#* }
@@ -200,8 +200,8 @@ prune_cache() {
 
 prune_cache
 
-# wl-copy daemonizes. Release first so its clipboard owner cannot inherit and
-# retain the cache lock for the lifetime of the clipboard contents.
+# clipboard-gif forks a long-lived clipboard owner. Release first so the owner
+# cannot inherit and retain the cache lock for the lifetime of the clipboard contents.
 release_lock || die 'cannot release the GIF cache lock; retry the copy'
 
 clipboard_helper=${LOOPBOX_CLIPBOARD_HELPER:-$default_clipboard_helper}

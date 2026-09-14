@@ -151,7 +151,7 @@ parse_shortcut() {
 binding_shortcut() {
     local binding=$1
     local mask key
-    shortcut_canonical=""
+    binding_canonical=""
     [[ $binding != null ]] || return 0
     mask=$(jq -r 'if ((.modmask // null) | type) == "number" then .modmask else -1 end' <<<"$binding")
     key=$(jq -r '.key // ""' <<<"$binding")
@@ -159,6 +159,7 @@ binding_shortcut() {
     (( (mask & ~77) == 0 )) || return 0
     canonicalize_key "$key" || return 0
     format_shortcut "$mask" "$canonical_key"
+    binding_canonical=$shortcut_canonical
 }
 
 read_bindings() {
@@ -206,8 +207,7 @@ print_status() {
     binds_json=$(read_bindings)
     configured=$(configured_binding <<<"$binds_json")
     binding_shortcut "$configured"
-    configured_shortcut=$shortcut_canonical
-    parse_shortcut "$shortcut"
+    configured_shortcut=$binding_canonical
     if [[ $force != true && $skipped == true && $configured == null ]]; then
         jq -cn --arg shortcut "$shortcut" '{configured: false, skipped: true, shortcut: $shortcut, currentShortcut: "", available: false, conflict: ""}'
         return
@@ -297,8 +297,7 @@ install_shortcut() {
     binds_json=$(read_bindings)
     configured=$(configured_binding <<<"$binds_json")
     binding_shortcut "$configured"
-    configured_shortcut=$shortcut_canonical
-    parse_shortcut "$shortcut"
+    configured_shortcut=$binding_canonical
     if [[ $configured != null && $configured_shortcut == "$shortcut" ]]; then
         jq -cn --arg shortcut "$shortcut" '{installed: true, alreadyConfigured: true, shortcut: $shortcut}'
         return

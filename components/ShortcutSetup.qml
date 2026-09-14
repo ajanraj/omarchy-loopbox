@@ -74,6 +74,7 @@ Item {
         : root.currentShortcut
         ? "Your active shortcut is " + root.displayShortcut(root.currentShortcut) + ". Record any new key combination to replace it."
         : "Use the suggested shortcut or record your own complete key combination."
+      textFormat: Text.PlainText
       color: root.foreground
       opacity: 0.66
       font.family: root.fontFamily
@@ -139,6 +140,7 @@ Item {
         : (root.available
           ? "This shortcut is available. Save it when you are ready."
           : "Record any modifier-and-key combination.")))))
+      textFormat: Text.PlainText
       color: root.errorMessage || root.conflict ? Color.urgent : root.foreground
       opacity: root.errorMessage || root.conflict ? 1 : 0.62
       font.family: root.fontFamily

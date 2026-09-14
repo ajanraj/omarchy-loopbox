@@ -317,7 +317,7 @@ Item {
 
   function installSelectedShortcut() {
     if (root.shortcutChecking) {
-      if (!root.shortcutDefaultConflict) root.shortcutInstallPending = true
+      root.shortcutInstallPending = true
       return
     }
     if (!root.shortcutAvailable || root.shortcutInstalling || shortcutProc.running) return
@@ -389,7 +389,6 @@ Item {
     root.fullPreviewTitle = result.title || "Untitled GIF"
     root.fullPreviewError = ""
     fullPreviewProc.serial = root.fullPreviewSerial
-    fullPreviewProc.expectedUrl = result.previewUrl
     fullPreviewProc.command = [root.previewScript, result.previewUrl]
     fullPreviewProc.running = true
   }
@@ -400,9 +399,20 @@ Item {
     root.openFullPreview()
   }
 
+  function keyDirection(key) {
+    if (key === Qt.Key_Left) return "left"
+    if (key === Qt.Key_Right) return "right"
+    if (key === Qt.Key_Up) return "up"
+    if (key === Qt.Key_Down) return "down"
+    if (key === Qt.Key_Home || key === Qt.Key_PageUp) return "home"
+    if (key === Qt.Key_End || key === Qt.Key_PageDown) return "end"
+    return ""
+  }
+
   function handleKey(event) {
     var control = (event.modifiers & Qt.ControlModifier) !== 0
     var shift = (event.modifiers & Qt.ShiftModifier) !== 0
+    var direction = root.keyDirection(event.key)
 
     if (root.shortcutSetup) {
       if (root.shortcutInstalling) {
@@ -431,18 +441,8 @@ Item {
       if (event.key === Qt.Key_Escape || event.key === Qt.Key_Space) {
         root.closeFullPreview()
         Qt.callLater(function() { keyCatcher.forceActiveFocus() })
-      } else if (event.key === Qt.Key_Left) {
-        root.navigateFullPreview("left")
-      } else if (event.key === Qt.Key_Right) {
-        root.navigateFullPreview("right")
-      } else if (event.key === Qt.Key_Up) {
-        root.navigateFullPreview("up")
-      } else if (event.key === Qt.Key_Down) {
-        root.navigateFullPreview("down")
-      } else if (event.key === Qt.Key_Home || event.key === Qt.Key_PageUp) {
-        root.navigateFullPreview("home")
-      } else if (event.key === Qt.Key_End || event.key === Qt.Key_PageDown) {
-        root.navigateFullPreview("end")
+      } else if (direction) {
+        root.navigateFullPreview(direction)
       } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
         if (shift) root.copyLink(root.selectedIndex)
         else root.copyGif(root.selectedIndex)
@@ -476,23 +476,8 @@ Item {
       root.setQuery(Util.editedFilter(event, root.query))
       searchInput.forceActiveFocus()
       event.accepted = true
-    } else if (event.key === Qt.Key_Left) {
-      root.navigate("left")
-      event.accepted = true
-    } else if (event.key === Qt.Key_Right) {
-      root.navigate("right")
-      event.accepted = true
-    } else if (event.key === Qt.Key_Up) {
-      root.navigate("up")
-      event.accepted = true
-    } else if (event.key === Qt.Key_Down) {
-      root.navigate("down")
-      event.accepted = true
-    } else if (event.key === Qt.Key_Home || event.key === Qt.Key_PageUp) {
-      root.navigate("home")
-      event.accepted = true
-    } else if (event.key === Qt.Key_End || event.key === Qt.Key_PageDown) {
-      root.navigate("end")
+    } else if (direction) {
+      root.navigate(direction)
       event.accepted = true
     } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
       if (shift) root.copyLink(root.selectedIndex)
@@ -1077,7 +1062,6 @@ Item {
   Process {
     id: fullPreviewProc
     property int serial: 0
-    property string expectedUrl: ""
 
     stdout: StdioCollector { id: fullPreviewStdout; waitForEnd: true }
     stderr: StdioCollector { id: fullPreviewStderr; waitForEnd: true }
@@ -1086,7 +1070,7 @@ Item {
       if (serial !== root.fullPreviewSerial || !root.opened || !root.fullPreviewVisible) return
       root.fullPreviewLoading = false
       var path = String(fullPreviewStdout.text || "").trim()
-      if (exitCode === 0 && exitStatus === 0 && expectedUrl
+      if (exitCode === 0 && exitStatus === 0
           && path.charAt(0) === "/") {
         root.fullPreviewPath = path
         root.fullPreviewError = ""
