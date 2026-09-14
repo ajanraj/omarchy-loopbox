@@ -78,7 +78,7 @@ launcher_status() {
     fi
 }
 
-case ${1:-install} in
+case ${1:-status} in
     install)
         [[ $# -eq 1 ]] || fail "usage: launcher [install|remove|status]"
         install_launcher

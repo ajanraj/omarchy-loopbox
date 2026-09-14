@@ -25,7 +25,7 @@ Loopbox targets current Omarchy 4 releases with the Quickshell-based Omarchy she
 - GTK 4 with PyGObject for advertising the GIF as both a clipboard file and `image/gif` data
 - `python3`, `jq`, and `hyprctl` for media URL checks, safe local state, and shortcut setup
 - Standard `coreutils` and `util-linux` tools for bounded downloads and cache coordination
-- `wl-clipboard` through Omarchy's `omarchy-clipboard-paste-file` helper
+- `wl-clipboard` (`wl-copy`) for copying the direct GIF link with Shift+Enter
 - Qt image format support for animated GIF previews
 
 Network access is required for search and uncached GIF copies. No API key is required.
