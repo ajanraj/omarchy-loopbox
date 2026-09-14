@@ -62,7 +62,13 @@ Item {
   property string fullPreviewError: ""
   property int fullPreviewSerial: 0
 
-  readonly property string pluginDirectory: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
+  // The public plugin manifest omits the shell's private source directory.
+  // Resolve beside this QML file and decode URL escapes for filesystem argv.
+  readonly property string pluginDirectory: {
+    var url = String(Qt.resolvedUrl("."))
+    return url.indexOf("file:///") === 0
+      ? decodeURIComponent(url.slice(7)).replace(/\/$/, "") : ""
+  }
   readonly property string copyScript: pluginDirectory + "/scripts/copy-gif"
   readonly property string previewScript: pluginDirectory + "/scripts/preview-gif"
   readonly property string shortcutScript: pluginDirectory + "/scripts/shortcut"
